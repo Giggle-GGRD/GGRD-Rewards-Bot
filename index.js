@@ -103,7 +103,13 @@ bot.start((ctx) => {
   ctx.replyWithMarkdown(
     welcomeMessage,
     Markup.inlineKeyboard([
-      Markup.button.callback("✅ Verify my tasks", "verify_tasks")
+      [
+        Markup.button.url("📢 Join Channel", "https://t.me/GGRDofficial"),
+        Markup.button.url("💬 Join Group", "https://t.me/GGRDchat")
+      ],
+      [
+        Markup.button.callback("✅ Zweryfikuj moje zadania", "verify_tasks")
+      ]
     ])
   );
 });
@@ -140,7 +146,13 @@ bot.action("verify_tasks", async (ctx) => {
       {
         parse_mode: "Markdown",
         ...Markup.inlineKeyboard([
-          Markup.button.callback("✅ Verify my tasks", "verify_tasks")
+          [
+            Markup.button.url("📢 Join Channel", "https://t.me/GGRDofficial"),
+            Markup.button.url("💬 Join Group", "https://t.me/GGRDchat")
+          ],
+          [
+            Markup.button.callback("✅ Zweryfikuj moje zadania", "verify_tasks")
+          ]
         ])
       }
     );
