@@ -3,74 +3,66 @@ const { Telegraf, Markup } = require("telegraf");
 const fs = require("fs");
 const path = require("path");
 
-// Configuration
+// === CONFIGURATION ===
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID = process.env.CHANNEL_ID;
-const GROUP_ID = process.env.GROUP_ID;
+const CHANNEL_ID = process.env.CHANNEL_ID; // e.g. @GGRDofficial
+const GROUP_ID = process.env.GROUP_ID;     // e.g. @GGRDchat
 const DB_FILE = path.join(__dirname, "ggrd_members.json");
+
+// Optional – tylko admin może /export, jeśli ustawisz ADMIN_ID w .env
+const ADMIN_ID = process.env.ADMIN_ID ? String(process.env.ADMIN_ID) : null;
 
 if (!BOT_TOKEN || !CHANNEL_ID || !GROUP_ID) {
   console.error("❌ Missing required environment variables in .env file");
   process.exit(1);
 }
 
-const bot = new Telegraf(BOT_TOKEN);
-
-// In-memory database
+// === DATABASE HANDLING ===
 let members = [];
 
-// Set of users waiting for wallet address
-const waitingForWallet = new Set();
-
-// Load database from file
 function loadDb() {
   try {
     if (fs.existsSync(DB_FILE)) {
-      const data = fs.readFileSync(DB_FILE, "utf8");
-      members = JSON.parse(data);
-      console.log(`✅ Loaded database, ${members.length} members`);
-      return members;
+      const raw = fs.readFileSync(DB_FILE, "utf8");
+      members = JSON.parse(raw);
+      if (!Array.isArray(members)) members = [];
     } else {
       members = [];
-      console.log("✅ Created new empty database");
-      return members;
     }
-  } catch (error) {
-    console.error("❌ Error loading database:", error.message);
+  } catch (err) {
+    console.error("❌ Failed to load database:", err.message);
     members = [];
-    console.log("✅ Created new empty database");
-    return members;
   }
 }
 
-// Save database to file
 function saveDb() {
   try {
     fs.writeFileSync(DB_FILE, JSON.stringify(members, null, 2), "utf8");
-  } catch (error) {
-    console.error("❌ Error saving database:", error.message);
+  } catch (err) {
+    console.error("❌ Failed to save database:", err.message);
   }
 }
 
-// Upsert member record
-function upsertMember(record) {
-  const index = members.findIndex(m => m.telegram_id === record.telegram_id);
-  
+function upsertMember(telegramId, record) {
+  const id = String(telegramId);
+  const index = members.findIndex((m) => String(m.telegram_id) === id);
+
   if (index !== -1) {
     members[index] = { ...members[index], ...record };
   } else {
-    members.push(record);
+    members.push({ telegram_id: id, ...record });
   }
-  
   saveDb();
 }
 
-// Get member by telegram_id
 function getMember(telegramId) {
-  return members.find(m => m.telegram_id === telegramId);
+  const id = String(telegramId);
+  return members.find((m) => String(m.telegram_id) === id) || null;
 }
 
-// Check if user is member of a chat
+// === HELPERS ===
+
+// Sprawdzenie członkostwa w kanale / grupie
 async function isUserMember(ctx, chatId, userId) {
   try {
     const member = await ctx.telegram.getChatMember(chatId, userId);
@@ -82,39 +74,64 @@ async function isUserMember(ctx, chatId, userId) {
   }
 }
 
-// Validate Solana wallet address
+// Walidacja adresu Solana
 function isValidSolanaAddress(address) {
   const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
-  return base58Regex.test(address.trim());
+  return base58Regex.test(address);
 }
 
-// Command: /start
-bot.start((ctx) => {
-  const welcomeMessage = 
-    "🎉 **Welcome to GGRD Community Rewards Bot!**\n\n" +
-    "This bot will verify your participation in the GGRD community and record your Solana wallet address for rewards distribution.\n\n" +
-    "**How it works:**\n" +
-    "1️⃣ Click the button below to verify your tasks\n" +
-    "2️⃣ Make sure you're a member of our channel and group\n" +
-    "3️⃣ Provide your Solana wallet address\n" +
-    "4️⃣ Done! You're registered for rewards\n\n" +
-    "Click the button below to get started! 👇";
+// Zbiór użytkowników, od których czekamy na adres portfela
+const waitingForWallet = new Set();
 
-  ctx.replyWithMarkdown(
-    welcomeMessage,
-    Markup.inlineKeyboard([
+// === BOT INIT ===
+const bot = new Telegraf(BOT_TOKEN);
+
+loadDb();
+console.log(`📊 Loaded members: ${members.length}`);
+
+// === COMMANDS & HANDLERS ===
+
+// /start – ekran główny
+bot.start(async (ctx) => {
+  const startMessage =
+    "Welcome to the *GGRD Community Rewards Bot* 🏹\n\n" +
+    "This bot helps you complete and verify community tasks so you can join future *GGRD* airdrops and raffles.\n\n" +
+    "*How it works (4 simple steps):*\n" +
+    "1️⃣ Join the official channel – @GGRDofficial\n" +
+    "2️⃣ Join the community chat – @GGRDchat\n" +
+    "3️⃣ Click “✅ Verify my tasks” below\n" +
+    "4️⃣ Send your Solana wallet address for rewards\n\n" +
+    "You can always check your status with /me.\n\n" +
+    "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
+    "_High-risk Solana meme experiment. Not financial advice._";
+
+  await ctx.reply(startMessage, {
+    parse_mode: "Markdown",
+    ...Markup.inlineKeyboard([
       [
-        Markup.button.url("📢 Join Channel", "https://t.me/GGRDofficial"),
-        Markup.button.url("💬 Join Group", "https://t.me/GGRDchat")
+        Markup.button.url("📢 Official Channel", "https://t.me/GGRDofficial"),
+        Markup.button.url("💬 Community Chat", "https://t.me/GGRDchat"),
       ],
-      [
-        Markup.button.callback("✅ Zweryfikuj moje zadania", "verify_tasks")
-      ]
-    ])
-  );
+      [Markup.button.callback("✅ Verify my tasks", "verify_tasks")],
+    ]),
+  });
 });
 
-// Action: verify_tasks
+// /help – krótka pomoc
+bot.help((ctx) => {
+  const msg =
+    "This is the official *GGRD Community Rewards Bot* 🏹\n\n" +
+    "What you can do here:\n" +
+    "• Verify if you joined @GGRDofficial and @GGRDchat\n" +
+    "• Register your Solana wallet address for GGRD rewards\n" +
+    "• Check your status with /me\n\n" +
+    "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
+    "_High-risk Solana meme experiment. Not financial advice._";
+
+  ctx.replyWithMarkdown(msg);
+});
+
+// ACTION: verify_tasks – weryfikacja kanału/grupy
 bot.action("verify_tasks", async (ctx) => {
   await ctx.answerCbQuery();
 
@@ -128,157 +145,150 @@ bot.action("verify_tasks", async (ctx) => {
 
   if (!inChannel || !inGroup) {
     const missingChats = [];
-    if (!inChannel) missingChats.push(`Channel: ${CHANNEL_ID}`);
-    if (!inGroup) missingChats.push(`Group: ${GROUP_ID}`);
+    if (!inChannel) missingChats.push(`• Channel: ${CHANNEL_ID}`);
+    if (!inGroup) missingChats.push(`• Group: ${GROUP_ID}`);
 
     const errorMessage =
-      "❌ **Verification Failed**\n\n" +
+      "❌ *Verification failed*\n\n" +
       "You need to join the following chats to participate in rewards:\n\n" +
-      missingChats.map(chat => `• ${chat}`).join("\n") + "\n\n" +
-      "**Please:**\n" +
-      "1️⃣ Join the channel: " + CHANNEL_ID + "\n" +
-      "2️⃣ Join the group: " + GROUP_ID + "\n" +
-      "3️⃣ Click 'Verify my tasks' button again\n\n" +
-      "👇 Click below to verify again after joining:";
+      missingChats.join("\n") +
+      "\n\n" +
+      "*Please:*\n" +
+      "1️⃣ Join the channel: @GGRDofficial\n" +
+      "2️⃣ Join the group: @GGRDchat\n" +
+      "3️⃣ Click the “✅ Verify my tasks” button again";
 
-    return ctx.editMessageText(
-      errorMessage,
-      {
-        parse_mode: "Markdown",
-        ...Markup.inlineKeyboard([
-          [
-            Markup.button.url("📢 Join Channel", "https://t.me/GGRDofficial"),
-            Markup.button.url("💬 Join Group", "https://t.me/GGRDchat")
-          ],
-          [
-            Markup.button.callback("✅ Zweryfikuj moje zadania", "verify_tasks")
-          ]
-        ])
-      }
-    );
+    return ctx.editMessageText(errorMessage, { parse_mode: "Markdown" });
   }
 
-  upsertMember({
-    telegram_id: userId,
+  // Zapisz/aktualizuj użytkownika – etap weryfikacji TG
+  upsertMember(userId, {
     telegram_username: username,
     first_name: firstName,
     last_name: lastName,
-    in_channel: true,
-    in_group: true
+    in_channel: inChannel,
+    in_group: inGroup,
   });
 
   const member = getMember(userId);
+
+  // Jeśli portfel już jest zapisany – nie prosimy ponownie
   if (member && member.wallet_address) {
-    return ctx.editMessageText(
-      "✅ **You're already verified!**\n\n" +
+    const msg =
+      "✅ *You're already verified!*\n\n" +
       `💰 Your wallet: \`${member.wallet_address}\`\n\n` +
-      "Use /me to see your full profile.",
-      { parse_mode: "Markdown" }
-    );
+      "Use /me to see your full profile.";
+    return ctx.editMessageText(msg, { parse_mode: "Markdown" });
   }
 
+  // Oczekujemy na adres portfela
   waitingForWallet.add(userId);
-  
+
   const walletRequestMessage =
-    "✅ **Verification Successful!**\n\n" +
-    "You are a verified member of GGRD community!\n\n" +
-    "📝 **Next Step:** Please send your Solana wallet address.\n\n" +
-    "⚠️ **Important:**\n" +
-    "• Send ONLY your wallet address (32-44 characters)\n" +
-    "• Make sure it's correct - you can't change it later\n" +
+    "✅ *Verification successful!*\n\n" +
+    "You are now a verified member of the GGRD community.\n\n" +
+    "*Next step:* please send your Solana wallet address.\n\n" +
+    "⚠️ *Important:*\n" +
+    "• Send ONLY your wallet address (32–44 characters)\n" +
+    "• Make sure it’s correct – you can’t change it later\n" +
     "• This address will be used for reward distributions\n\n" +
-    "💡 Example format: `7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU`";
+    "💡 Example:\n`Fz2w9g...x9a`";
 
   ctx.editMessageText(walletRequestMessage, { parse_mode: "Markdown" });
 });
 
-// Handler for text messages (wallet addresses)
+// Obsługa wiadomości tekstowych – zapis portfela
 bot.on("text", (ctx) => {
   const userId = ctx.from.id;
   const text = ctx.message.text.trim();
 
-  if (text.startsWith("/")) {
-    return;
-  }
+  // Komendy obsługuje Telegraf osobno
+  if (text.startsWith("/")) return;
 
   if (!waitingForWallet.has(userId)) {
+    // Użytkownik nie jest w trybie podawania portfela – ignorujemy
     return;
   }
 
   if (!isValidSolanaAddress(text)) {
     return ctx.reply(
-      "❌ **Invalid Solana address format!**\n\n" +
-      "Please send a valid Solana wallet address (32-44 Base58 characters).\n\n" +
-      "💡 Example: `7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgAsU`",
-      { parse_mode: "Markdown" }
+      "❌ This does not look like a valid Solana wallet address.\n\n" +
+        "Please send a correct Solana address (base58, 32–44 characters)."
     );
   }
 
-  upsertMember({
-    telegram_id: userId,
-    wallet_address: text
+  upsertMember(userId, {
+    wallet_address: text,
+    updated_at: new Date().toISOString(),
   });
 
   waitingForWallet.delete(userId);
 
-  const confirmationMessage =
-    "✅ **Wallet Address Saved!**\n\n" +
-    "Your Solana wallet has been successfully registered in the GGRD rewards program.\n\n" +
-    `💰 Wallet: \`${text}\`\n\n` +
-    "🎉 You're all set! Use /me to view your complete profile.\n\n" +
-    "Thank you for being part of the GGRD community! 🚀";
-
-  ctx.replyWithMarkdown(confirmationMessage);
+  ctx.reply(
+    "🎉 All set!\n\n" +
+      "Your wallet has been registered for *GGRD Community Rewards*.\n\n" +
+      "You can check your status anytime with /me.",
+    { parse_mode: "Markdown" }
+  );
 
   console.log(`✅ Wallet registered for user ${userId}: ${text}`);
 });
 
-// Command: /me
+// /me – status użytkownika
 bot.command("me", (ctx) => {
   const userId = ctx.from.id;
   const member = getMember(userId);
 
   if (!member) {
     return ctx.reply(
-      "❌ No data found. Please use /start and click 'Verify my tasks' button to register."
+      "❌ No data found. Please use /start and click “✅ Verify my tasks” to register."
     );
   }
 
   const statusMessage =
-    "📋 **Your GGRD Profile**\n\n" +
+    "📋 *Your GGRD Profile*\n\n" +
     `🆔 Telegram ID: \`${member.telegram_id}\`\n` +
-    `👤 Username: ${member.telegram_username ? "@" + member.telegram_username : "not set"}\n` +
-    `📛 Name: ${member.first_name || ""} ${member.last_name || ""}\n\n` +
-    `📢 Channel Member: ${member.in_channel ? "✅ Yes" : "❌ No"}\n` +
-    `💬 Group Member: ${member.in_group ? "✅ Yes" : "❌ No"}\n\n` +
-    `💰 Wallet Address: ${member.wallet_address ? `\`${member.wallet_address}\`` : "❌ Not set"}`;
+    `👤 Username: ${
+      member.telegram_username ? "@" + member.telegram_username : "not set"
+    }\n` +
+    `📛 Name: ${(member.first_name || "") + " " + (member.last_name || "")}\n\n` +
+    `📢 Channel member: ${member.in_channel ? "✅ Yes" : "❌ No"}\n` +
+    `💬 Group member: ${member.in_group ? "✅ Yes" : "❌ No"}\n\n` +
+    `💰 Wallet address: ${
+      member.wallet_address ? "`" + member.wallet_address + "`" : "❌ Not set"
+    }`;
 
   ctx.replyWithMarkdown(statusMessage);
 });
 
-// Command: /export
+// /export – eksport bazy (dla admina)
 bot.command("export", async (ctx) => {
+  const fromId = String(ctx.from.id);
+
+  if (ADMIN_ID && fromId !== ADMIN_ID) {
+    return ctx.reply("❌ You are not allowed to use this command.");
+  }
+
   try {
     if (!fs.existsSync(DB_FILE)) {
-      return ctx.reply("❌ Database file not found.");
+      return ctx.reply("❌ No database file found.");
     }
 
-    await ctx.replyWithDocument(
-      { source: DB_FILE, filename: "ggrd_members.json" },
-      { caption: `📊 GGRD Members Database\nTotal members: ${members.length}` }
-    );
-  } catch (error) {
-    console.error("❌ Error sending export file:", error);
-    ctx.reply("❌ Error exporting database. Please try again.");
+    await ctx.replyWithDocument({
+      source: DB_FILE,
+      filename: "ggrd_members.json",
+    });
+
+    console.log(`📤 Export sent to ${fromId}`);
+  } catch (err) {
+    console.error("❌ Failed to export database:", err.message);
+    ctx.reply("❌ Failed to export database. Check server logs.");
   }
 });
 
-// Load database on startup
-loadDb();
-
-// Launch bot
-console.log("⏳ Connecting to Telegram API...");
-bot.launch()
+// === START BOT ===
+bot
+  .launch()
   .then(() => {
     console.log("✅ Connected to Telegram!");
     console.log("🤖 GGRD Community Rewards Bot started successfully!");
@@ -287,17 +297,10 @@ bot.launch()
     console.log(`📊 Current members in database: ${members.length}`);
   })
   .catch((error) => {
-    console.error("\n❌ Failed to start bot:");
-    console.error("Error:", error.message);
-    console.error("\n💡 Possible reasons:");
-    console.error("   1. Invalid BOT_TOKEN in .env file");
-    console.error("   2. No internet connection");
-    console.error("   3. Bot already running in another process");
-    console.error("   4. Telegram API is down");
-    console.error("\n🔧 Try:");
-    console.error("   - Check token in @BotFather with /mybots");
-    console.error("   - Run: Stop-Process -Name node -Force");
-    console.error("   - Then restart: node index.js");
+    console.error("\n❌ Failed to start bot:", error.message);
+    console.error(
+      "💡 Check BOT_TOKEN, internet connection and whether the bot is not running in another process."
+    );
     process.exit(1);
   });
 
