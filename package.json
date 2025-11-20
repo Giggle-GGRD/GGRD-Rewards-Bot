@@ -1,0 +1,16 @@
+{
+  "name": "ggrd-rewards-bot",
+  "version": "1.0.0",
+  "description": "GGRD Community Rewards Bot - Telegram verification bot for GGRD members",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": ["telegram", "bot", "ggrd", "rewards", "solana"],
+  "author": "EURO-TAX",
+  "license": "ISC",
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "dotenv": "^16.4.5"
+  }
+}
