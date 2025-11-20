@@ -1,0 +1,16 @@
+services:
+  - type: worker
+    name: ggrd-rewards-bot
+    runtime: node
+    env: node
+    region: frankfurt
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHANNEL_ID
+        value: @GGRDofficial
+      - key: GROUP_ID
+        value: @GGRDchat

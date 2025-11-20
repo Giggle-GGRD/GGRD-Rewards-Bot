@@ -1,5 +1,9 @@
 # 🎉 GGRD Community Rewards Bot
 
+![Node.js CI](https://github.com/Giggle-GGRD/GGRD-Rewards-Bot/workflows/Node.js%20CI/badge.svg)
+![License](https://img.shields.io/github/license/Giggle-GGRD/GGRD-Rewards-Bot)
+![Stars](https://img.shields.io/github/stars/Giggle-GGRD/GGRD-Rewards-Bot)
+
 Telegram bot for verifying GGRD community members and collecting Solana wallet addresses for rewards distribution.
 
 ## 🌟 Features
@@ -12,6 +16,21 @@ Telegram bot for verifying GGRD community members and collecting Solana wallet a
 - 👤 User profile viewing (/me command)
 
 ## 🚀 Quick Start
+
+### 🌐 Deploy on Render.com (Recommended)
+
+For 24/7 hosting, deploy on Render.com for free!
+
+📖 **[Complete Deployment Guide → DEPLOYMENT.md](./DEPLOYMENT.md)**
+
+**Quick steps:**
+1. Push this repo to GitHub
+2. Create account on [Render.com](https://render.com)
+3. Connect GitHub repository
+4. Add `BOT_TOKEN` as environment variable
+5. Deploy! 🎉
+
+### 💻 Local Installation
 
 ### Prerequisites
 
