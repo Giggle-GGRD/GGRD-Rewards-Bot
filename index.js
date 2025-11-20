@@ -7,13 +7,12 @@ const path = require("path");
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID; // e.g. @GGRDofficial
 const GROUP_ID = process.env.GROUP_ID;     // e.g. @GGRDchat
-const DB_FILE = path.join(__dirname, "ggrd_members.json");
-
-// Optional – tylko admin może /export, jeśli ustawisz ADMIN_ID w .env
 const ADMIN_ID = process.env.ADMIN_ID ? String(process.env.ADMIN_ID) : null;
 
+const DB_FILE = path.join(__dirname, "ggrd_members.json");
+
 if (!BOT_TOKEN || !CHANNEL_ID || !GROUP_ID) {
-  console.error("❌ Missing required environment variables in .env file");
+  console.error("❌ Missing BOT_TOKEN, CHANNEL_ID or GROUP_ID in environment.");
   process.exit(1);
 }
 
@@ -52,6 +51,7 @@ function upsertMember(telegramId, record) {
   } else {
     members.push({ telegram_id: id, ...record });
   }
+
   saveDb();
 }
 
@@ -62,7 +62,7 @@ function getMember(telegramId) {
 
 // === HELPERS ===
 
-// Sprawdzenie członkostwa w kanale / grupie
+// Check membership in channel / group
 async function isUserMember(ctx, chatId, userId) {
   try {
     const member = await ctx.telegram.getChatMember(chatId, userId);
@@ -74,13 +74,13 @@ async function isUserMember(ctx, chatId, userId) {
   }
 }
 
-// Walidacja adresu Solana
+// Simple Solana base58 address validation
 function isValidSolanaAddress(address) {
   const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
   return base58Regex.test(address);
 }
 
-// Zbiór użytkowników, od których czekamy na adres portfela
+// Track users waiting for wallet
 const waitingForWallet = new Set();
 
 // === BOT INIT ===
@@ -91,7 +91,7 @@ console.log(`📊 Loaded members: ${members.length}`);
 
 // === COMMANDS & HANDLERS ===
 
-// /start – ekran główny
+// /start – main intro
 bot.start(async (ctx) => {
   const startMessage =
     "Welcome to the *GGRD Community Rewards Bot* 🏹\n\n" +
@@ -110,14 +110,14 @@ bot.start(async (ctx) => {
     ...Markup.inlineKeyboard([
       [
         Markup.button.url("📢 Official Channel", "https://t.me/GGRDofficial"),
-        Markup.button.url("💬 Community Chat", "https://t.me/GGRDchat"),
+        Markup.button.url("💬 Community Chat", "https://t.me/GGRDchat")
       ],
-      [Markup.button.callback("✅ Verify my tasks", "verify_tasks")],
-    ]),
+      [Markup.button.callback("✅ Verify my tasks", "verify_tasks")]
+    ])
   });
 });
 
-// /help – krótka pomoc
+// /help – basic info
 bot.help((ctx) => {
   const msg =
     "This is the official *GGRD Community Rewards Bot* 🏹\n\n" +
@@ -128,10 +128,10 @@ bot.help((ctx) => {
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
-  ctx.replyWithMarkdown(msg);
+  ctx.reply(msg, { parse_mode: "Markdown" });
 });
 
-// ACTION: verify_tasks – weryfikacja kanału/grupy
+// ACTION: verify_tasks – check channel & group membership
 bot.action("verify_tasks", async (ctx) => {
   await ctx.answerCbQuery();
 
@@ -144,14 +144,14 @@ bot.action("verify_tasks", async (ctx) => {
   const inGroup = await isUserMember(ctx, GROUP_ID, userId);
 
   if (!inChannel || !inGroup) {
-    const missingChats = [];
-    if (!inChannel) missingChats.push(`• Channel: ${CHANNEL_ID}`);
-    if (!inGroup) missingChats.push(`• Group: ${GROUP_ID}`);
+    const missing = [];
+    if (!inChannel) missing.push(`• Channel: ${CHANNEL_ID}`);
+    if (!inGroup) missing.push(`• Group: ${GROUP_ID}`);
 
     const errorMessage =
       "❌ *Verification failed*\n\n" +
       "You need to join the following chats to participate in rewards:\n\n" +
-      missingChats.join("\n") +
+      missing.join("\n") +
       "\n\n" +
       "*Please:*\n" +
       "1️⃣ Join the channel: @GGRDofficial\n" +
@@ -161,27 +161,28 @@ bot.action("verify_tasks", async (ctx) => {
     return ctx.editMessageText(errorMessage, { parse_mode: "Markdown" });
   }
 
-  // Zapisz/aktualizuj użytkownika – etap weryfikacji TG
+  // Save/update user after TG verification
   upsertMember(userId, {
     telegram_username: username,
     first_name: firstName,
     last_name: lastName,
     in_channel: inChannel,
-    in_group: inGroup,
+    in_group: inGroup
   });
 
   const member = getMember(userId);
 
-  // Jeśli portfel już jest zapisany – nie prosimy ponownie
+  // Wallet already saved – do not ask again
   if (member && member.wallet_address) {
     const msg =
-      "✅ *You're already verified!*\n\n" +
-      `💰 Your wallet: \`${member.wallet_address}\`\n\n` +
-      "Use /me to see your full profile.";
-    return ctx.editMessageText(msg, { parse_mode: "Markdown" });
+      "✅ You're already verified!\n\n" +
+      "Your wallet for GGRD Community Rewards is:\n" +
+      member.wallet_address +
+      "\n\nUse /me to see your full profile.";
+    return ctx.editMessageText(msg);
   }
 
-  // Oczekujemy na adres portfela
+  // Wait for wallet from this user
   waitingForWallet.add(userId);
 
   const walletRequestMessage =
@@ -192,21 +193,21 @@ bot.action("verify_tasks", async (ctx) => {
     "• Send ONLY your wallet address (32–44 characters)\n" +
     "• Make sure it’s correct – you can’t change it later\n" +
     "• This address will be used for reward distributions\n\n" +
-    "💡 Example:\n`Fz2w9g...x9a`";
+    "💡 Example:\nFz2w9g...x9a";
 
   ctx.editMessageText(walletRequestMessage, { parse_mode: "Markdown" });
 });
 
-// Obsługa wiadomości tekstowych – zapis portfela
+// Handle text messages – wallet registration
 bot.on("text", (ctx) => {
   const userId = ctx.from.id;
-  const text = ctx.message.text.trim();
+  const text = (ctx.message.text || "").trim();
 
-  // Komendy obsługuje Telegraf osobno
+  // Ignore commands here – they are handled by other middleware
   if (text.startsWith("/")) return;
 
   if (!waitingForWallet.has(userId)) {
-    // Użytkownik nie jest w trybie podawania portfela – ignorujemy
+    // User is not in "waiting for wallet" mode – ignore
     return;
   }
 
@@ -219,49 +220,48 @@ bot.on("text", (ctx) => {
 
   upsertMember(userId, {
     wallet_address: text,
-    updated_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
   });
 
   waitingForWallet.delete(userId);
 
-  ctx.reply(
+  const msg =
     "🎉 All set!\n\n" +
-      "Your wallet has been registered for *GGRD Community Rewards*.\n\n" +
-      "You can check your status anytime with /me.",
-    { parse_mode: "Markdown" }
-  );
+    "Your wallet has been registered for *GGRD Community Rewards*.\n\n" +
+    "You can check your status anytime with /me.";
+
+  ctx.reply(msg, { parse_mode: "Markdown" });
 
   console.log(`✅ Wallet registered for user ${userId}: ${text}`);
 });
 
-// /me – status użytkownika
+// /me – user status (PLAIN TEXT, no Markdown to avoid parse issues)
 bot.command("me", (ctx) => {
   const userId = ctx.from.id;
   const member = getMember(userId);
 
   if (!member) {
     return ctx.reply(
-      "❌ No data found. Please use /start and click “✅ Verify my tasks” to register."
+      "No data found for your account.\n\n" +
+        "Use /start and press \"✅ Verify my tasks\" to register."
     );
   }
 
-  const statusMessage =
-    "📋 *Your GGRD Profile*\n\n" +
-    `🆔 Telegram ID: \`${member.telegram_id}\`\n` +
-    `👤 Username: ${
-      member.telegram_username ? "@" + member.telegram_username : "not set"
-    }\n` +
-    `📛 Name: ${(member.first_name || "") + " " + (member.last_name || "")}\n\n` +
-    `📢 Channel member: ${member.in_channel ? "✅ Yes" : "❌ No"}\n` +
-    `💬 Group member: ${member.in_group ? "✅ Yes" : "❌ No"}\n\n` +
-    `💰 Wallet address: ${
-      member.wallet_address ? "`" + member.wallet_address + "`" : "❌ Not set"
-    }`;
+  const fullName = ((member.first_name || "") + " " + (member.last_name || "")).trim();
 
-  ctx.replyWithMarkdown(statusMessage);
+  const statusMessage =
+    "Your GGRD Community Rewards profile:\n\n" +
+    "Telegram ID: " + member.telegram_id + "\n" +
+    "Username: " + (member.telegram_username ? "@" + member.telegram_username : "not set") + "\n" +
+    "Name: " + (fullName || "not set") + "\n\n" +
+    "Channel member: " + (member.in_channel ? "YES" : "NO") + "\n" +
+    "Group member: " + (member.in_group ? "YES" : "NO") + "\n\n" +
+    "Wallet address: " + (member.wallet_address || "NOT SET");
+
+  ctx.reply(statusMessage);
 });
 
-// /export – eksport bazy (dla admina)
+// /export – export database (admin only)
 bot.command("export", async (ctx) => {
   const fromId = String(ctx.from.id);
 
@@ -276,7 +276,7 @@ bot.command("export", async (ctx) => {
 
     await ctx.replyWithDocument({
       source: DB_FILE,
-      filename: "ggrd_members.json",
+      filename: "ggrd_members.json"
     });
 
     console.log(`📤 Export sent to ${fromId}`);
