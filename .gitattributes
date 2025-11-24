@@ -1,0 +1,17 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# JavaScript
+*.js linguist-language=JavaScript
+
+# Documentation
+*.md linguist-documentation
+
+# Config files
+*.json linguist-language=JSON
+*.yaml linguist-language=YAML
+*.yml linguist-language=YAML
+
+# Ignore generated files
+node_modules/* linguist-vendored
+package-lock.json linguist-generated
