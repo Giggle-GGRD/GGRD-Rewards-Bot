@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 const { Telegraf, Markup } = require("telegraf");
 const { MongoClient } = require("mongodb");
 
@@ -10,13 +10,13 @@ const ADMIN_ID = process.env.ADMIN_ID ? String(process.env.ADMIN_ID) : null;
 const MONGODB_URI = process.env.MONGODB_URI;
 
 if (!BOT_TOKEN || !CHANNEL_ID || !GROUP_ID) {
-  console.error("âťŚ Missing BOT_TOKEN, CHANNEL_ID or GROUP_ID in environment.");
+  console.error("[ERROR] Missing BOT_TOKEN, CHANNEL_ID or GROUP_ID in environment.");
   process.exit(1);
 }
 
 if (!MONGODB_URI) {
-  console.error("âťŚ Missing MONGODB_URI in environment.");
-  console.error("đź’ˇ Add your MongoDB connection string to environment variables.");
+  console.error("[ERROR] Missing MONGODB_URI in environment.");
+  console.error("[INFO] Add your MongoDB connection string to environment variables.");
   process.exit(1);
 }
 
@@ -26,25 +26,25 @@ let membersCollection;
 
 async function connectToMongoDB() {
   try {
-    console.log("đź”„ Connecting to MongoDB...");
+    console.log("[LOADING] Connecting to MongoDB...");
     const client = new MongoClient(MONGODB_URI);
     await client.connect();
     
     db = client.db("ggrd_bot");
     membersCollection = db.collection("members");
     
-    console.log("âś… Connected to MongoDB successfully!");
+    console.log("[OK] Connected to MongoDB successfully!");
     
     // Create index on telegram_id for faster queries
     await membersCollection.createIndex({ telegram_id: 1 }, { unique: true });
     
     const count = await membersCollection.countDocuments();
-    console.log(`đź“Š Current members in database: ${count}`);
+    console.log(`[STATS] Current members in database: ${count}`);
     
     return client;
   } catch (error) {
-    console.error("âťŚ Failed to connect to MongoDB:", error.message);
-    console.error("đź’ˇ Check your MONGODB_URI in environment variables.");
+    console.error("[ERROR] Failed to connect to MongoDB:", error.message);
+    console.error("[INFO] Check your MONGODB_URI in environment variables.");
     process.exit(1);
   }
 }
@@ -67,14 +67,14 @@ async function upsertMember(telegramId, record) {
     );
     
     if (result.upsertedCount > 0) {
-      console.log(`âž• Added new member ${id}`);
+      console.log(`[+] Added new member ${id}`);
     } else if (result.modifiedCount > 0) {
-      console.log(`đź”„ Updated member ${id}`);
+      console.log(`[UPDATE] Updated member ${id}`);
     }
     
     return result;
   } catch (error) {
-    console.error(`âťŚ Error upserting member ${telegramId}:`, error.message);
+    console.error(`[ERROR] Error upserting member ${telegramId}:`, error.message);
     throw error;
   }
 }
@@ -85,7 +85,7 @@ async function getMember(telegramId) {
     const member = await membersCollection.findOne({ telegram_id: id });
     return member;
   } catch (error) {
-    console.error(`âťŚ Error getting member ${telegramId}:`, error.message);
+    console.error(`[ERROR] Error getting member ${telegramId}:`, error.message);
     return null;
   }
 }
@@ -94,7 +94,7 @@ async function getAllMembers() {
   try {
     return await membersCollection.find({}).toArray();
   } catch (error) {
-    console.error("âťŚ Error getting all members:", error.message);
+    console.error("[ERROR] Error getting all members:", error.message);
     return [];
   }
 }
@@ -107,7 +107,7 @@ async function isUserMember(ctx, chatId, userId) {
     const validStatuses = ["member", "administrator", "creator"];
     return validStatuses.includes(member.status);
   } catch (error) {
-    console.error(`âťŚ Error checking membership in ${chatId}:`, error.message);
+    console.error(`[ERROR] Error checking membership in ${chatId}:`, error.message);
     return false;
   }
 }
@@ -126,16 +126,16 @@ const bot = new Telegraf(BOT_TOKEN);
 // === COMMANDS & HANDLERS ===
 
 bot.start(async (ctx) => {
-  console.log(`đź†• /start from user ${ctx.from.id}`);
+  console.log(`[START] /start from user ${ctx.from.id}`);
   
   const startMessage =
-    "Welcome to the *GGRD Community Rewards Bot* đźŹą\n\n" +
+    "Welcome to the *GGRD Community Rewards Bot*\n\n" +
     "This bot helps you complete and verify community tasks so you can join future *GGRD* airdrops and raffles.\n\n" +
     "*How it works (4 simple steps):*\n" +
-    "1ď¸ŹâŁ Join the official channel â€“ @GGRDofficial\n" +
-    "2ď¸ŹâŁ Join the community chat â€“ @GGRDchat\n" +
-    "3ď¸ŹâŁ Click \"âś… Verify my tasks\" below\n" +
-    "4ď¸ŹâŁ Send your Solana wallet address for rewards\n\n" +
+    "1. Join the official channel - @GGRDofficial\n" +
+    "2. Join the community chat - @GGRDchat\n" +
+    "3. Click the button below to verify your tasks\n" +
+    "4. Send your Solana wallet address for rewards\n\n" +
     "You can always check your status with /me.\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
@@ -144,23 +144,23 @@ bot.start(async (ctx) => {
     parse_mode: "Markdown",
     ...Markup.inlineKeyboard([
       [
-        Markup.button.url("đź“˘ Official Channel", "https://t.me/GGRDofficial"),
-        Markup.button.url("đź’¬ Community Chat", "https://t.me/GGRDchat")
+        Markup.button.url("Official Channel", "https://t.me/GGRDofficial"),
+        Markup.button.url("Community Chat", "https://t.me/GGRDchat")
       ],
-      [Markup.button.callback("âś… Verify my tasks", "verify_tasks")]
+      [Markup.button.callback("Verify my tasks", "verify_tasks")]
     ])
   });
 });
 
 bot.help((ctx) => {
-  console.log(`âť“ /help from user ${ctx.from.id}`);
+  console.log(`[HELP] /help from user ${ctx.from.id}`);
   
   const msg =
-    "This is the official *GGRD Community Rewards Bot* đźŹą\n\n" +
+    "This is the official *GGRD Community Rewards Bot*\n\n" +
     "What you can do here:\n" +
-    "â€˘ Verify if you joined @GGRDofficial and @GGRDchat\n" +
-    "â€˘ Register your Solana wallet address for GGRD rewards\n" +
-    "â€˘ Check your status with /me\n\n" +
+    "- Verify if you joined @GGRDofficial and @GGRDchat\n" +
+    "- Register your Solana wallet address for GGRD rewards\n" +
+    "- Check your status with /me\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
@@ -175,29 +175,29 @@ bot.action("verify_tasks", async (ctx) => {
   const firstName = ctx.from.first_name || null;
   const lastName = ctx.from.last_name || null;
 
-  console.log(`đź”Ť verify_tasks from user ${userId}`);
+  console.log(`[VERIFY] verify_tasks from user ${userId}`);
 
   const inChannel = await isUserMember(ctx, CHANNEL_ID, userId);
   const inGroup = await isUserMember(ctx, GROUP_ID, userId);
 
-  console.log(`đź“Š User ${userId}: channel=${inChannel}, group=${inGroup}`);
+  console.log(`[CHECK] User ${userId}: channel=${inChannel}, group=${inGroup}`);
 
   if (!inChannel || !inGroup) {
     const missing = [];
-    if (!inChannel) missing.push(`â€˘ Channel: ${CHANNEL_ID}`);
-    if (!inGroup) missing.push(`â€˘ Group: ${GROUP_ID}`);
+    if (!inChannel) missing.push(`- Channel: ${CHANNEL_ID}`);
+    if (!inGroup) missing.push(`- Group: ${GROUP_ID}`);
 
-    console.log(`âťŚ User ${userId} verification failed: ${missing.join(', ')}`);
+    console.log(`[FAILED] User ${userId} verification failed: ${missing.join(', ')}`);
 
     const errorMessage =
-      "âťŚ *Verification failed*\n\n" +
+      "*Verification failed*\n\n" +
       "You need to join the following chats to participate in rewards:\n\n" +
       missing.join("\n") +
       "\n\n" +
       "*Please:*\n" +
-      "1ď¸ŹâŁ Join the channel: @GGRDofficial\n" +
-      "2ď¸ŹâŁ Join the group: @GGRDchat\n" +
-      "3ď¸ŹâŁ Click the \"âś… Verify my tasks\" button again";
+      "1. Join the channel: @GGRDofficial\n" +
+      "2. Join the group: @GGRDchat\n" +
+      "3. Click the button again to verify";
 
     return ctx.editMessageText(errorMessage, { parse_mode: "Markdown" });
   }
@@ -213,9 +213,9 @@ bot.action("verify_tasks", async (ctx) => {
   const member = await getMember(userId);
 
   if (member && member.wallet_address) {
-    console.log(`âś… User ${userId} already has wallet registered`);
+    console.log(`[OK] User ${userId} already has wallet registered`);
     const msg =
-      "âś… You're already verified!\n\n" +
+      "You're already verified!\n\n" +
       "Your wallet for GGRD Community Rewards is:\n" +
       member.wallet_address +
       "\n\nUse /me to see your full profile.";
@@ -223,17 +223,17 @@ bot.action("verify_tasks", async (ctx) => {
   }
 
   waitingForWallet.add(userId);
-  console.log(`âŹł User ${userId} added to waitingForWallet`);
+  console.log(`[WAITING] User ${userId} added to waitingForWallet`);
 
   const walletRequestMessage =
-    "âś… *Verification successful!*\n\n" +
+    "*Verification successful!*\n\n" +
     "You are now a verified member of the GGRD community.\n\n" +
     "*Next step:* please send your Solana wallet address.\n\n" +
-    "âš ď¸Ź *Important:*\n" +
-    "â€˘ Send ONLY your wallet address (32â€“44 characters)\n" +
-    "â€˘ Make sure it's correct â€“ you can't change it later\n" +
-    "â€˘ This address will be used for reward distributions\n\n" +
-    "đź’ˇ Example:\nFz2w9g...x9a";
+    "*Important:*\n" +
+    "- Send ONLY your wallet address (32-44 characters)\n" +
+    "- Make sure it's correct - you can't change it later\n" +
+    "- This address will be used for reward distributions\n\n" +
+    "Example: Fz2w9g...x9a";
 
   ctx.editMessageText(walletRequestMessage, { parse_mode: "Markdown" });
 });
@@ -248,13 +248,13 @@ bot.on("text", async (ctx) => {
     return;
   }
 
-  console.log(`đź’° Received potential wallet from user ${userId}: ${text.substring(0, 10)}...`);
+  console.log(`[WALLET] Received potential wallet from user ${userId}: ${text.substring(0, 10)}...`);
 
   if (!isValidSolanaAddress(text)) {
-    console.log(`âťŚ Invalid wallet format from user ${userId}`);
+    console.log(`[INVALID] Invalid wallet format from user ${userId}`);
     return ctx.reply(
-      "âťŚ This does not look like a valid Solana wallet address.\n\n" +
-        "Please send a correct Solana address (base58, 32â€“44 characters)."
+      "This does not look like a valid Solana wallet address.\n\n" +
+        "Please send a correct Solana address (base58, 32-44 characters)."
     );
   }
 
@@ -265,31 +265,31 @@ bot.on("text", async (ctx) => {
   waitingForWallet.delete(userId);
 
   const msg =
-    "đźŽ‰ All set!\n\n" +
+    "All set!\n\n" +
     "Your wallet has been registered for *GGRD Community Rewards*.\n\n" +
     "You can check your status anytime with /me.";
 
   ctx.reply(msg, { parse_mode: "Markdown" });
 
-  console.log(`âś… Wallet registered for user ${userId}: ${text}`);
+  console.log(`[OK] Wallet registered for user ${userId}: ${text}`);
 });
 
 bot.command("me", async (ctx) => {
   const userId = ctx.from.id;
-  console.log(`đź”Ť [/me] User ${userId} requested profile`);
+  console.log(`[ME] User ${userId} requested profile`);
   
   const member = await getMember(userId);
 
   if (!member) {
     const count = await membersCollection.countDocuments();
-    console.log(`âťŚ [/me] User ${userId} not found in database (DB has ${count} members)`);
+    console.log(`[NOT FOUND] User ${userId} not found in database (DB has ${count} members)`);
     return ctx.reply(
       "No data found for your account.\n\n" +
-        "Use /start and press \"âś… Verify my tasks\" to register."
+        "Use /start and press the verify button to register."
     );
   }
 
-  console.log(`âś… [/me] Found member: ${JSON.stringify(member)}`);
+  console.log(`[OK] Found member: ${JSON.stringify(member)}`);
 
   const fullName = ((member.first_name || "") + " " + (member.last_name || "")).trim();
 
@@ -304,29 +304,29 @@ bot.command("me", async (ctx) => {
 
   ctx.reply(statusMessage)
     .then(() => {
-      console.log(`âś… [/me] Profile sent successfully to user ${userId}`);
+      console.log(`[OK] Profile sent successfully to user ${userId}`);
     })
     .catch((error) => {
-      console.error(`âťŚ [/me] Error sending profile to user ${userId}:`, error.message);
-      ctx.reply("âťŚ Error displaying profile. Please try /start again.");
+      console.error(`[ERROR] Error sending profile to user ${userId}:`, error.message);
+      ctx.reply("Error displaying profile. Please try /start again.");
     });
 });
 
 bot.command("export", async (ctx) => {
   const fromId = String(ctx.from.id);
-  console.log(`đź“¤ [/export] Request from user ${fromId}`);
+  console.log(`[EXPORT] Request from user ${fromId}`);
 
   if (ADMIN_ID && fromId !== ADMIN_ID) {
-    console.log(`âťŚ [/export] Unauthorized access attempt by user ${fromId}`);
-    return ctx.reply("âťŚ You are not allowed to use this command.");
+    console.log(`[DENIED] Unauthorized access attempt by user ${fromId}`);
+    return ctx.reply("You are not allowed to use this command.");
   }
 
   try {
     const members = await getAllMembers();
     
     if (members.length === 0) {
-      console.log(`âťŚ [/export] No members in database`);
-      return ctx.reply("âťŚ No members in database.");
+      console.log(`[EMPTY] No members in database`);
+      return ctx.reply("No members in database.");
     }
 
     const jsonData = JSON.stringify(members, null, 2);
@@ -336,13 +336,13 @@ bot.command("export", async (ctx) => {
       source: buffer,
       filename: `ggrd_members_${new Date().toISOString().split('T')[0]}.json`
     }, {
-      caption: `đź“Š GGRD Members Export\nTotal members: ${members.length}\nDate: ${new Date().toLocaleDateString()}`
+      caption: `GGRD Members Export\nTotal members: ${members.length}\nDate: ${new Date().toLocaleDateString()}`
     });
 
-    console.log(`âś… [/export] Database exported successfully to ${fromId} (${members.length} members)`);
+    console.log(`[OK] Database exported successfully to ${fromId} (${members.length} members)`);
   } catch (err) {
-    console.error(`âťŚ [/export] Failed to export:`, err.message);
-    ctx.reply("âťŚ Failed to export database. Check server logs.");
+    console.error(`[ERROR] Failed to export:`, err.message);
+    ctx.reply("Failed to export database. Check server logs.");
   }
 });
 
@@ -355,31 +355,30 @@ async function startBot() {
     // Then launch bot
     await bot.launch();
     
-    console.log("âś… Connected to Telegram!");
-    console.log("đź¤– GGRD Community Rewards Bot started successfully!");
-    console.log(`đź“˘ Monitoring channel: ${CHANNEL_ID}`);
-    console.log(`đź’¬ Monitoring group: ${GROUP_ID}`);
+    console.log("[OK] Connected to Telegram!");
+    console.log("[OK] GGRD Community Rewards Bot started successfully!");
+    console.log(`[INFO] Monitoring channel: ${CHANNEL_ID}`);
+    console.log(`[INFO] Monitoring group: ${GROUP_ID}`);
     
     const count = await membersCollection.countDocuments();
-    console.log(`đź“Š Current members in database: ${count}`);
+    console.log(`[STATS] Current members in database: ${count}`);
   } catch (error) {
-    console.error("\nâťŚ Failed to start bot:", error.message);
-    console.error("đź’ˇ Check BOT_TOKEN, MONGODB_URI and internet connection.");
+    console.error("\n[ERROR] Failed to start bot:", error.message);
+    console.error("[INFO] Check BOT_TOKEN, MONGODB_URI and internet connection.");
     process.exit(1);
   }
 }
 
 // Graceful stop
 process.once("SIGINT", () => {
-  console.log("\nâš ď¸Ź SIGINT received, stopping bot...");
+  console.log("\n[SIGINT] Stopping bot...");
   bot.stop("SIGINT");
 });
 
 process.once("SIGTERM", () => {
-  console.log("\nâš ď¸Ź SIGTERM received, stopping bot...");
+  console.log("\n[SIGTERM] Stopping bot...");
   bot.stop("SIGTERM");
 });
 
 // Start the bot
 startBot();
-
