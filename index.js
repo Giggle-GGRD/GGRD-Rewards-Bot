@@ -120,6 +120,13 @@ async function upsertMember(telegramId, record) {
         first_name: null,
         last_name: null,
         wallet_address: null,
+        referred_by: null,
+        referrals: {
+          count: 0,
+          count_with_wallet: 0,
+          earned: 0,
+          reward_paid: false
+        },
         tasks: {
           tg_channel: false,
           tg_group: false
@@ -568,6 +575,44 @@ const bot = new Telegraf(BOT_TOKEN);
 bot.start(async (ctx) => {
   console.log(`[START] /start from user ${ctx.from.id}`);
   
+  // Check for referral parameter
+  const startPayload = ctx.message.text.split(' ')[1];
+  let referrerId = null;
+  
+  if (startPayload && startPayload.startsWith('ref_')) {
+    referrerId = startPayload.replace('ref_', '');
+    console.log(`[REFERRAL] User ${ctx.from.id} referred by ${referrerId}`);
+  }
+  
+  // Check if user already exists
+  const existingMember = await getMember(ctx.from.id);
+  
+  if (!existingMember && referrerId && referrerId !== String(ctx.from.id)) {
+    // New user with valid referral
+    await upsertMember(ctx.from.id, {
+      telegram_username: ctx.from.username,
+      first_name: ctx.from.first_name,
+      last_name: ctx.from.last_name,
+      referred_by: referrerId
+    });
+    
+    // Increment referrer's count
+    const referrer = await getMember(referrerId);
+    if (referrer) {
+      await updateTaskStatus(referrerId, {
+        "referrals.count": (referrer.referrals?.count || 0) + 1
+      });
+      console.log(`[REFERRAL] Incremented count for referrer ${referrerId}`);
+    }
+  } else if (!existingMember) {
+    // New user without referral
+    await upsertMember(ctx.from.id, {
+      telegram_username: ctx.from.username,
+      first_name: ctx.from.first_name,
+      last_name: ctx.from.last_name
+    });
+  }
+  
   const startMessage =
     "Welcome to the *GGRD Community Rewards Bot*\n\n" +
     "This bot helps you complete and verify community tasks so you can join future *GGRD* airdrops and raffles.\n\n" +
@@ -581,7 +626,8 @@ bot.start(async (ctx) => {
     "/top100 - View TOP 100 holders\n" +
     "/task3\\_status - Detailed Task 3 status\n" +
     "/biggest\\_holder - Biggest holder competition\n" +
-    "/leaderboard - Holder rankings\n\n" +
+    "/leaderboard - Holder rankings\n" +
+    "/invite - Get your referral link\n\n" +
     "*Buy GGRD:* Use buttons below to purchase on Jupiter or view on GeckoTerminal.\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
@@ -705,6 +751,25 @@ bot.command(["tasks"], async (ctx) => {
       message += "\nUse /task3_status for details.\n";
     }
     
+    message += "\n";
+    
+    // REFERRAL PROGRAM
+    const referralEarned = member.referrals?.earned || 0;
+    const referralPaid = member.referrals?.reward_paid || false;
+    
+    message += referralEarned > 0 ? "[OK] " : "[INFO] ";
+    message += "Referral Program\n";
+    message += "  Invite friends (5 GGRD each)\n";
+    message += "  Reward: Day 10 after LP launch\n";
+    
+    if (referralEarned > 0) {
+      message += `  Earned: ${referralEarned} GGRD\n`;
+      message += referralPaid ? "  Status: ✅ Paid\n" : "  Status: ⏳ Pending (Day 10)\n";
+      message += "  Use /invite for your link\n";
+    } else {
+      message += "  Use /invite to get started\n";
+    }
+    
     message += "\n━━━━━━━━━━━━━━━━━━━━━━\n";
     message += `Total Rewards: ${member.total_rewards || 0} GGRD\n`;
     
@@ -776,6 +841,22 @@ bot.command(["me", "profile"], async (ctx) => {
     statusMessage += "\nUse /tasks to see detailed task status.";
 
     await ctx.reply(statusMessage);
+    
+    // Show referral stats if user has referrals
+    if ((member.referrals?.count || 0) > 0) {
+      const botUsername = (await ctx.telegram.getMe()).username;
+      const referralLink = `https://t.me/${botUsername}?start=ref_${member.telegram_id}`;
+      
+      const referralMsg =
+        "\n👥 REFERRAL STATS:\n\n" +
+        `Total invites: ${member.referrals.count}\n` +
+        `With wallet: ${member.referrals.count_with_wallet}\n` +
+        `Earned: ${member.referrals.earned} GGRD\n` +
+        (member.referrals.reward_paid ? "Status: ✅ Paid\n" : "Status: ⏳ Pending (Day 10)\n") +
+        `\nYour link: ${referralLink}`;
+      
+      await ctx.reply(referralMsg);
+    }
     console.log(`[OK] Profile sent successfully to user ${userId}`);
   } catch (error) {
     console.error(`[ERROR] Error in profile command for user ${userId}:`, error.message);
@@ -1460,10 +1541,30 @@ bot.command("stats", async (ctx) => {
       msg += `Days until award: ${30 - dailySnapshots}\n`;
     }
     
+    msg += "\n━━━ REFERRAL PROGRAM ━━━\n";
+    const totalReferrals = await membersCollection.countDocuments({ "referrals.count": { $gt: 0 } });
+    const totalWithWallet = await membersCollection.countDocuments({ "referrals.count_with_wallet": { $gt: 0 } });
+    const referralPayouts = await snapshotsCollection.findOne({ snapshot_type: "referral_payout" });
+    
+    const totalReferralRewards = await membersCollection.aggregate([
+      { $group: { _id: null, total: { $sum: "$referrals.earned" } } }
+    ]).toArray();
+    const referralEarned = totalReferralRewards[0]?.total || 0;
+    
+    msg += `Referrers: ${totalReferrals}\n`;
+    msg += `Successful referrals: ${totalWithWallet}\n`;
+    msg += `Total earned: ${referralEarned}/10,000 GGRD\n`;
+    
+    if (referralPayouts) {
+      msg += `Payout: Executed (${referralPayouts.recipients_count} users)\n`;
+    } else {
+      msg += "Payout: Pending (Day 10)\n";
+    }
+    
     msg += "\n━━━ TOTAL REWARDS ━━━\n";
     const totalRewards = (task1Complete * 10) + (task2Verified * 20) + (top100Count * 50) +
       (lottery1 ? lottery1.prize_amount : 0) + (lottery3 ? lottery3.prize_amount : 0) +
-      (biggestHolderAwarded ? 20000 : 0);
+      (biggestHolderAwarded ? 20000 : 0) + (referralPayouts ? referralPayouts.total_paid : 0);
     msg += `Distributed: ${totalRewards} GGRD\n`;
     
     await ctx.reply(msg);
@@ -1788,6 +1889,233 @@ bot.command("award_biggest_holder", async (ctx) => {
   }
 });
 
+// Command: /invite - show referral link and stats
+bot.command("invite", async (ctx) => {
+  const userId = String(ctx.from.id);
+  
+  try {
+    const member = await getMember(userId);
+    
+    if (!member) {
+      return ctx.reply("Please use /start first to register.");
+    }
+    
+    const botUsername = (await ctx.telegram.getMe()).username;
+    const referralLink = `https://t.me/${botUsername}?start=ref_${userId}`;
+    
+    // Check global pool status
+    const totalReferralRewards = await membersCollection.aggregate([
+      { $group: { _id: null, total: { $sum: "$referrals.earned" } } }
+    ]).toArray();
+    
+    const currentTotal = totalReferralRewards[0]?.total || 0;
+    const remaining = 10000 - currentTotal;
+    
+    let msg = "👥 Referral Program\n\n";
+    
+    if (remaining > 0) {
+      msg += "*How it works:*\n";
+      msg += "1. Share your link\n";
+      msg += "2. Friend joins + adds wallet\n";
+      msg += "3. You earn 5 GGRD\n\n";
+      msg += `⚠️ Rewards paid on *Day 10* after LP launch\n\n`;
+    } else {
+      msg += "❌ Pool limit reached (10,000 GGRD)\n\n";
+    }
+    
+    msg += "━━━ Your Stats ━━━\n";
+    msg += `Total referrals: ${member.referrals?.count || 0}\n`;
+    msg += `With wallet: ${member.referrals?.count_with_wallet || 0}\n`;
+    msg += `Earned: ${member.referrals?.earned || 0} GGRD\n`;
+    
+    if (member.referrals?.reward_paid) {
+      msg += "Status: ✅ Paid\n";
+    } else if ((member.referrals?.earned || 0) > 0) {
+      msg += "Status: ⏳ Pending (Day 10)\n";
+    }
+    
+    msg += "\n━━━ Global Pool ━━━\n";
+    msg += `Distributed: ${currentTotal.toFixed(0)} / 10,000 GGRD\n`;
+    msg += `Remaining: ${remaining.toFixed(0)} GGRD\n\n`;
+    
+    if (remaining > 0) {
+      msg += `*Your link:*\n`${referralLink}`\n\n`;
+      msg += "Use /referrals to see TOP recruiters";
+    }
+    
+    await ctx.reply(msg, { parse_mode: "Markdown" });
+    
+  } catch (error) {
+    console.error(`[ERROR] Error in invite command:`, error.message);
+    ctx.reply("Error displaying referral info. Please try again.");
+  }
+});
+
+// Command: /referrals - show TOP 10 referrers leaderboard
+bot.command("referrals", async (ctx) => {
+  try {
+    const topReferrers = await membersCollection.find({
+      "referrals.count_with_wallet": { $gt: 0 }
+    }).sort({ "referrals.earned": -1 }).limit(10).toArray();
+    
+    if (topReferrers.length === 0) {
+      return ctx.reply(
+        "📊 Referral Leaderboard\n\n" +
+        "No referrals yet. Be the first!\n\n" +
+        "Use /invite to get your referral link."
+      );
+    }
+    
+    let msg = "📊 TOP 10 Referral Champions\n\n";
+    
+    const userId = String(ctx.from.id);
+    let userRank = null;
+    
+    for (let i = 0; i < topReferrers.length; i++) {
+      const r = topReferrers[i];
+      const username = r.telegram_username ? `@${r.telegram_username}` : `User ${r.telegram_id}`;
+      const isYou = r.telegram_id === userId ? " ← YOU" : "";
+      msg += `${i + 1}. ${username}\n`;
+      msg += `   👥 ${r.referrals.count_with_wallet} referrals • 💰 ${r.referrals.earned} GGRD${isYou}\n`;
+      
+      if (r.telegram_id === userId) {
+        userRank = i + 1;
+      }
+    }
+    
+    // Show user's rank if not in TOP 10
+    if (!userRank) {
+      const member = await getMember(userId);
+      if (member && (member.referrals?.count_with_wallet || 0) > 0) {
+        const allReferrers = await membersCollection.find({
+          "referrals.count_with_wallet": { $gt: 0 }
+        }).sort({ "referrals.earned": -1 }).toArray();
+        
+        const rank = allReferrers.findIndex(r => r.telegram_id === userId) + 1;
+        if (rank > 0) {
+          msg += "\n━━━ Your Position ━━━\n";
+          msg += `Rank: #${rank} of ${allReferrers.length}\n`;
+          msg += `👥 ${member.referrals.count_with_wallet} referrals • 💰 ${member.referrals.earned} GGRD\n`;
+        }
+      }
+    }
+    
+    msg += "\n⚠️ Rewards paid on Day 10 after LP launch";
+    
+    await ctx.reply(msg);
+    
+  } catch (error) {
+    console.error(`[ERROR] Error in referrals command:`, error.message);
+    ctx.reply("Error displaying referral leaderboard. Please try again.");
+  }
+});
+
+// Admin command: /pay_referrals - pay all referral rewards on Day 10
+bot.command("pay_referrals", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  try {
+    // Check if Day 0 snapshot exists
+    const day0Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day0" });
+    if (!day0Snapshot) {
+      return ctx.reply("❌ LP must be launched first! Execute /snapshot_day0");
+    }
+    
+    // Calculate current day
+    const day0Time = new Date(day0Snapshot.timestamp);
+    const now = new Date();
+    const daysPassed = Math.floor((now - day0Time) / (24 * 60 * 60 * 1000));
+    const currentDay = daysPassed + 1;
+    
+    if (currentDay < 10) {
+      return ctx.reply(
+        `❌ Too early! Referral rewards are paid on Day 10.\n\n` +
+        `Current: Day ${currentDay}\n` +
+        `Wait: ${10 - currentDay} more days`
+      );
+    }
+    
+    // Check if already paid
+    const paymentRecord = await snapshotsCollection.findOne({ snapshot_type: "referral_payout" });
+    if (paymentRecord) {
+      return ctx.reply(
+        "❌ Referral rewards already paid!\n\n" +
+        `Date: ${paymentRecord.timestamp.toISOString()}\n` +
+        `Total paid: ${paymentRecord.total_paid} GGRD\n` +
+        `Recipients: ${paymentRecord.recipients_count}`
+      );
+    }
+    
+    await ctx.reply("🔄 Processing referral payouts...\nThis may take a few minutes.");
+    
+    // Get all users with referral earnings
+    const referrers = await membersCollection.find({
+      "referrals.earned": { $gt: 0 },
+      "referrals.reward_paid": false
+    }).toArray();
+    
+    let totalPaid = 0;
+    let recipientsCount = 0;
+    
+    for (const referrer of referrers) {
+      const earned = referrer.referrals.earned;
+      
+      // Mark as paid
+      await updateTaskStatus(referrer.telegram_id, {
+        "referrals.reward_paid": true,
+        total_rewards: (referrer.total_rewards || 0) + earned
+      });
+      
+      totalPaid += earned;
+      recipientsCount++;
+      
+      // Notify user
+      try {
+        await bot.telegram.sendMessage(
+          referrer.telegram_id,
+          `🎉 Referral Rewards Paid!\n\n` +
+          `You earned: ${earned} GGRD\n` +
+          `Successful referrals: ${referrer.referrals.count_with_wallet}\n` +
+          `Wallet: ${referrer.wallet_address}\n\n` +
+          "The rewards will be sent to your wallet within 24 hours.\n\n" +
+          "Thank you for growing the GGRD community!"
+        );
+      } catch (err) {
+        console.log(`[WARN] Could not notify referrer ${referrer.telegram_id}`);
+      }
+    }
+    
+    // Save payout record
+    await snapshotsCollection.insertOne({
+      snapshot_type: "referral_payout",
+      timestamp: new Date(),
+      day: currentDay,
+      total_paid: totalPaid,
+      recipients_count: recipientsCount,
+      executed_by: userId
+    });
+    
+    const msg =
+      "✅ Referral Payouts Complete!\n\n" +
+      `Total paid: ${totalPaid} GGRD\n` +
+      `Recipients: ${recipientsCount}\n` +
+      `Day: ${currentDay} (Day 10)\n\n` +
+      `Executed: ${new Date().toISOString()}`;
+    
+    await ctx.reply(msg);
+    
+    console.log(`[REFERRAL_PAYOUT] Paid ${totalPaid} GGRD to ${recipientsCount} referrers`);
+    
+  } catch (error) {
+    console.error(`[ERROR] Referral payout failed:`, error.message);
+    ctx.reply("❌ Error processing referral payouts. Check server logs.");
+  }
+});
+
 // Command: /task3_status - show Task 3 detailed status
 bot.command("task3_status", async (ctx) => {
   const userId = String(ctx.from.id);
@@ -2096,6 +2424,47 @@ bot.on("text", async (ctx) => {
   });
 
   waitingForWallet.delete(userId);
+  
+  // Check if user was referred - credit referrer
+  const member = await getMember(userId);
+  if (member.referred_by) {
+    const referrer = await getMember(member.referred_by);
+    if (referrer) {
+      // Check global pool limit
+      const totalReferralRewards = await membersCollection.aggregate([
+        { $group: { _id: null, total: { $sum: "$referrals.earned" } } }
+      ]).toArray();
+      
+      const currentTotal = totalReferralRewards[0]?.total || 0;
+      
+      if (currentTotal < 10000) {
+        // Credit referrer
+        await updateTaskStatus(member.referred_by, {
+          "referrals.count_with_wallet": (referrer.referrals?.count_with_wallet || 0) + 1,
+          "referrals.earned": (referrer.referrals?.earned || 0) + 5
+        });
+        
+        console.log(`[REFERRAL] Credited 5 GGRD to referrer ${member.referred_by}`);
+        
+        // Notify referrer
+        try {
+          await bot.telegram.sendMessage(
+            member.referred_by,
+            `🎉 Referral Success!\n\n` +
+            `Your referral just added their wallet!\n` +
+            `Earned: 5 GGRD\n` +
+            `Total referral earnings: ${(referrer.referrals?.earned || 0) + 5} GGRD\n\n` +
+            `⚠️ Rewards will be paid on Day 10 after LP launch.\n\n` +
+            `Use /invite to get more referrals!`
+          );
+        } catch (err) {
+          console.log(`[WARN] Could not notify referrer ${member.referred_by}`);
+        }
+      } else {
+        console.log(`[REFERRAL] Pool limit reached (${currentTotal}/10000)`);
+      }
+    }
+  }
   
   // Try to complete Task 1
   const result = await assignTask1Rewards(userId);
