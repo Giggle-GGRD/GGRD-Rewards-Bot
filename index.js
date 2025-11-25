@@ -573,7 +573,11 @@ bot.start(async (ctx) => {
     "1. Join the official channel - " + CHANNEL_ID + "\n" +
     "2. Join the community chat - " + GROUP_ID + "\n" +
     "3. Click the button below to verify your tasks\n\n" +
-    "Use /tasks to see all available rewards.\n\n" +
+    "*Quick Commands:*\n" +
+    "/tasks - See all available rewards\n" +
+    "/me - Check your status\n" +
+    "/top100 - View TOP 100 holders\n" +
+    "/leaderboard - Holder rankings\n\n" +
     "*Buy GGRD:* Use buttons below to purchase on Jupiter or view on GeckoTerminal.\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
