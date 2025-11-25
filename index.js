@@ -125,6 +125,8 @@ const bot = new Telegraf(BOT_TOKEN);
 
 // === COMMANDS & HANDLERS ===
 
+// Commands FIRST - they must be registered before bot.on("text")
+
 bot.start(async (ctx) => {
   console.log(`[START] /start from user ${ctx.from.id}`);
   
@@ -165,113 +167,6 @@ bot.help((ctx) => {
     "_High-risk Solana meme experiment. Not financial advice._";
 
   ctx.reply(msg, { parse_mode: "Markdown" });
-});
-
-bot.action("verify_tasks", async (ctx) => {
-  await ctx.answerCbQuery();
-
-  const userId = ctx.from.id;
-  const username = ctx.from.username || null;
-  const firstName = ctx.from.first_name || null;
-  const lastName = ctx.from.last_name || null;
-
-  console.log(`[VERIFY] verify_tasks from user ${userId}`);
-
-  const inChannel = await isUserMember(ctx, CHANNEL_ID, userId);
-  const inGroup = await isUserMember(ctx, GROUP_ID, userId);
-
-  console.log(`[CHECK] User ${userId}: channel=${inChannel}, group=${inGroup}`);
-
-  if (!inChannel || !inGroup) {
-    const missing = [];
-    if (!inChannel) missing.push(`- Channel: ${CHANNEL_ID}`);
-    if (!inGroup) missing.push(`- Group: ${GROUP_ID}`);
-
-    console.log(`[FAILED] User ${userId} verification failed: ${missing.join(', ')}`);
-
-    const errorMessage =
-      "*Verification failed*\n\n" +
-      "You need to join the following chats to participate in rewards:\n\n" +
-      missing.join("\n") +
-      "\n\n" +
-      "*Please:*\n" +
-      "1. Join the channel: @GGRDofficial\n" +
-      "2. Join the group: @GGRDchat\n" +
-      "3. Click the button again to verify";
-
-    return ctx.editMessageText(errorMessage, { parse_mode: "Markdown" });
-  }
-
-  await upsertMember(userId, {
-    telegram_username: username,
-    first_name: firstName,
-    last_name: lastName,
-    in_channel: inChannel,
-    in_group: inGroup
-  });
-
-  const member = await getMember(userId);
-
-  if (member && member.wallet_address) {
-    console.log(`[OK] User ${userId} already has wallet registered`);
-    const msg =
-      "You're already verified!\n\n" +
-      "Your wallet for GGRD Community Rewards is:\n" +
-      member.wallet_address +
-      "\n\nUse /me or /profile to see your full profile.";
-    return ctx.editMessageText(msg);
-  }
-
-  waitingForWallet.add(userId);
-  console.log(`[WAITING] User ${userId} added to waitingForWallet`);
-
-  const walletRequestMessage =
-    "*Verification successful!*\n\n" +
-    "You are now a verified member of the GGRD community.\n\n" +
-    "*Next step:* please send your Solana wallet address.\n\n" +
-    "*Important:*\n" +
-    "- Send ONLY your wallet address (32-44 characters)\n" +
-    "- Make sure it's correct - you can't change it later\n" +
-    "- This address will be used for reward distributions\n\n" +
-    "Example: Fz2w9g...x9a";
-
-  ctx.editMessageText(walletRequestMessage, { parse_mode: "Markdown" });
-});
-
-bot.on("text", async (ctx) => {
-  const userId = ctx.from.id;
-  const text = (ctx.message.text || "").trim();
-
-  if (text.startsWith("/")) return;
-
-  if (!waitingForWallet.has(userId)) {
-    return;
-  }
-
-  console.log(`[WALLET] Received potential wallet from user ${userId}: ${text.substring(0, 10)}...`);
-
-  if (!isValidSolanaAddress(text)) {
-    console.log(`[INVALID] Invalid wallet format from user ${userId}`);
-    return ctx.reply(
-      "This does not look like a valid Solana wallet address.\n\n" +
-        "Please send a correct Solana address (base58, 32-44 characters)."
-    );
-  }
-
-  await upsertMember(userId, {
-    wallet_address: text
-  });
-
-  waitingForWallet.delete(userId);
-
-  const msg =
-    "All set!\n\n" +
-    "Your wallet has been registered for *GGRD Community Rewards*.\n\n" +
-    "You can check your status anytime with /me or /profile.";
-
-  ctx.reply(msg, { parse_mode: "Markdown" });
-
-  console.log(`[OK] Wallet registered for user ${userId}: ${text}`);
 });
 
 // Command: /me and /profile - show user status
@@ -344,6 +239,119 @@ bot.command("export", async (ctx) => {
     console.error(`[ERROR] Failed to export:`, err.message);
     ctx.reply("Failed to export database. Check server logs.");
   }
+});
+
+// Action handler for button
+bot.action("verify_tasks", async (ctx) => {
+  await ctx.answerCbQuery();
+
+  const userId = ctx.from.id;
+  const username = ctx.from.username || null;
+  const firstName = ctx.from.first_name || null;
+  const lastName = ctx.from.last_name || null;
+
+  console.log(`[VERIFY] verify_tasks from user ${userId}`);
+
+  const inChannel = await isUserMember(ctx, CHANNEL_ID, userId);
+  const inGroup = await isUserMember(ctx, GROUP_ID, userId);
+
+  console.log(`[CHECK] User ${userId}: channel=${inChannel}, group=${inGroup}`);
+
+  if (!inChannel || !inGroup) {
+    const missing = [];
+    if (!inChannel) missing.push(`- Channel: ${CHANNEL_ID}`);
+    if (!inGroup) missing.push(`- Group: ${GROUP_ID}`);
+
+    console.log(`[FAILED] User ${userId} verification failed: ${missing.join(', ')}`);
+
+    const errorMessage =
+      "*Verification failed*\n\n" +
+      "You need to join the following chats to participate in rewards:\n\n" +
+      missing.join("\n") +
+      "\n\n" +
+      "*Please:*\n" +
+      "1. Join the channel: @GGRDofficial\n" +
+      "2. Join the group: @GGRDchat\n" +
+      "3. Click the button again to verify";
+
+    return ctx.editMessageText(errorMessage, { parse_mode: "Markdown" });
+  }
+
+  await upsertMember(userId, {
+    telegram_username: username,
+    first_name: firstName,
+    last_name: lastName,
+    in_channel: inChannel,
+    in_group: inGroup
+  });
+
+  const member = await getMember(userId);
+
+  if (member && member.wallet_address) {
+    console.log(`[OK] User ${userId} already has wallet registered`);
+    const msg =
+      "You're already verified!\n\n" +
+      "Your wallet for GGRD Community Rewards is:\n" +
+      member.wallet_address +
+      "\n\nUse /me or /profile to see your full profile.";
+    return ctx.editMessageText(msg);
+  }
+
+  waitingForWallet.add(userId);
+  console.log(`[WAITING] User ${userId} added to waitingForWallet`);
+
+  const walletRequestMessage =
+    "*Verification successful!*\n\n" +
+    "You are now a verified member of the GGRD community.\n\n" +
+    "*Next step:* please send your Solana wallet address.\n\n" +
+    "*Important:*\n" +
+    "- Send ONLY your wallet address (32-44 characters)\n" +
+    "- Make sure it's correct - you can't change it later\n" +
+    "- This address will be used for reward distributions\n\n" +
+    "Example: Fz2w9g...x9a";
+
+  ctx.editMessageText(walletRequestMessage, { parse_mode: "Markdown" });
+});
+
+// Text handler for wallet input - MUST be registered AFTER commands
+bot.on("text", async (ctx) => {
+  const userId = ctx.from.id;
+  const text = (ctx.message.text || "").trim();
+
+  // Ignore commands - they are handled above
+  if (text.startsWith("/")) {
+    console.log(`[SKIP] Ignoring command in text handler: ${text}`);
+    return;
+  }
+
+  if (!waitingForWallet.has(userId)) {
+    return;
+  }
+
+  console.log(`[WALLET] Received potential wallet from user ${userId}: ${text.substring(0, 10)}...`);
+
+  if (!isValidSolanaAddress(text)) {
+    console.log(`[INVALID] Invalid wallet format from user ${userId}`);
+    return ctx.reply(
+      "This does not look like a valid Solana wallet address.\n\n" +
+        "Please send a correct Solana address (base58, 32-44 characters)."
+    );
+  }
+
+  await upsertMember(userId, {
+    wallet_address: text
+  });
+
+  waitingForWallet.delete(userId);
+
+  const msg =
+    "All set!\n\n" +
+    "Your wallet has been registered for *GGRD Community Rewards*.\n\n" +
+    "You can check your status anytime with /me or /profile.";
+
+  ctx.reply(msg, { parse_mode: "Markdown" });
+
+  console.log(`[OK] Wallet registered for user ${userId}: ${text}`);
 });
 
 // === START BOT ===
