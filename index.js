@@ -1625,10 +1625,38 @@ bot.command(["biggest_holder", "top_holder"], async (ctx) => {
     msg += `Days tracked: ${currentLeader.days_tracked}\n\n`;
     
     msg += "━━━ Top 5 Contenders ━━━\n";
+    const userId = String(ctx.from.id);
+    let userRank = null;
+    let userStats = null;
+    
     for (let i = 0; i < Math.min(5, rankedHolders.length); i++) {
       const h = rankedHolders[i];
       const wallet = h.wallet_address.substring(0, 4) + "..." + h.wallet_address.substring(h.wallet_address.length - 4);
-      msg += `${i + 1}. ${wallet} - ${h.average_balance.toFixed(0)} GGRD avg\n`;
+      const isYou = h.telegram_id === userId ? " ← YOU" : "";
+      msg += `${i + 1}. ${wallet} - ${h.average_balance.toFixed(0)} GGRD avg${isYou}\n`;
+      
+      if (h.telegram_id === userId) {
+        userRank = i + 1;
+        userStats = h;
+      }
+    }
+    
+    // Show user's rank if not in TOP 5
+    if (!userRank) {
+      for (let i = 0; i < rankedHolders.length; i++) {
+        if (rankedHolders[i].telegram_id === userId) {
+          userRank = i + 1;
+          userStats = rankedHolders[i];
+          break;
+        }
+      }
+      
+      if (userRank) {
+        msg += "\n━━━ Your Position ━━━\n";
+        const wallet = userStats.wallet_address.substring(0, 4) + "..." + userStats.wallet_address.substring(userStats.wallet_address.length - 4);
+        msg += `Rank: #${userRank} of ${rankedHolders.length}\n`;
+        msg += `${wallet} - ${userStats.average_balance.toFixed(0)} GGRD avg\n`;
+      }
     }
     
     if (dailySnapshots.length < 30) {
