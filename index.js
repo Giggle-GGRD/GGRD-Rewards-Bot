@@ -6,8 +6,12 @@ const { MongoClient } = require("mongodb");
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
 const GROUP_ID = process.env.GROUP_ID;
+const TWITTER_HANDLE = process.env.TWITTER_HANDLE || "@GGRD_Official";
 const ADMIN_ID = process.env.ADMIN_ID ? String(process.env.ADMIN_ID) : null;
 const MONGODB_URI = process.env.MONGODB_URI;
+const CHANTERSPOT_API_KEY = process.env.CHANTERSPOT_API_KEY;
+const GGRD_TOKEN_MINT = process.env.GGRD_TOKEN_MINT;
+const TASK2_MAX_USERS = parseInt(process.env.TASK2_MAX_USERS || "300");
 
 if (!BOT_TOKEN || !CHANNEL_ID || !GROUP_ID) {
   console.error("[ERROR] Missing BOT_TOKEN, CHANNEL_ID or GROUP_ID in environment.");
@@ -61,6 +65,37 @@ async function upsertMember(telegramId, record) {
           ...record,
           telegram_id: id,
           updated_at: new Date()
+        },
+        $setOnInsert: {
+          created_at: new Date(),
+          tasks: {
+            tg_channel: false,
+            tg_group: false,
+            twitter_follow: false
+          },
+          task1_completed: false,
+          task1_reward: 0,
+          task1_lottery_entry: null,
+          task2_purchase: {
+            submitted: false,
+            tx_hash: null,
+            amount_usd: 0,
+            verified: false,
+            reward_claimed: false
+          },
+          task2_reward: 0,
+          task3_holder: {
+            balance_ggrd: 0,
+            snapshot_day0: false,
+            snapshot_day7: false,
+            qualified_lottery: false,
+            top100_rank: null
+          },
+          task3_reward: 0,
+          task3_lottery_entry: null,
+          total_rewards: 0,
+          disqualified: false,
+          disqualified_reason: null
         }
       },
       { upsert: true }
@@ -99,6 +134,75 @@ async function getAllMembers() {
   }
 }
 
+async function updateTaskStatus(telegramId, updates) {
+  try {
+    const id = String(telegramId);
+    await membersCollection.updateOne(
+      { telegram_id: id },
+      { 
+        $set: { 
+          ...updates,
+          updated_at: new Date()
+        }
+      }
+    );
+    console.log(`[UPDATE] Task status updated for ${id}`);
+  } catch (error) {
+    console.error(`[ERROR] Error updating task status for ${telegramId}:`, error.message);
+  }
+}
+
+async function generateLotteryEntry(taskNumber) {
+  try {
+    // Generate unique lottery entry number
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 10000);
+    return `${taskNumber}-${timestamp}-${random}`;
+  } catch (error) {
+    console.error("[ERROR] Error generating lottery entry:", error.message);
+    return null;
+  }
+}
+
+async function checkTask1Completion(member) {
+  const tasks = member.tasks || {};
+  return tasks.tg_channel && tasks.tg_group && tasks.twitter_follow;
+}
+
+async function assignTask1Rewards(telegramId) {
+  try {
+    const member = await getMember(telegramId);
+    if (!member) return;
+    
+    if (member.task1_completed) {
+      console.log(`[SKIP] Task 1 already completed for ${telegramId}`);
+      return;
+    }
+    
+    const isCompleted = await checkTask1Completion(member);
+    if (!isCompleted) {
+      console.log(`[SKIP] Task 1 not completed yet for ${telegramId}`);
+      return;
+    }
+    
+    const lotteryEntry = await generateLotteryEntry(1);
+    
+    await updateTaskStatus(telegramId, {
+      task1_completed: true,
+      task1_reward: 10,
+      task1_lottery_entry: lotteryEntry,
+      total_rewards: (member.total_rewards || 0) + 10
+    });
+    
+    console.log(`[REWARD] Task 1 completed for ${telegramId}: 10 GGRD + lottery entry ${lotteryEntry}`);
+    
+    return { reward: 10, lotteryEntry };
+  } catch (error) {
+    console.error(`[ERROR] Error assigning Task 1 rewards:`, error.message);
+    return null;
+  }
+}
+
 // === HELPERS ===
 
 async function isUserMember(ctx, chatId, userId) {
@@ -115,6 +219,10 @@ async function isUserMember(ctx, chatId, userId) {
 function isValidSolanaAddress(address) {
   const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
   return base58Regex.test(address);
+}
+
+function isAdmin(userId) {
+  return ADMIN_ID && String(userId) === ADMIN_ID;
 }
 
 // Track users waiting for wallet
@@ -134,11 +242,11 @@ bot.start(async (ctx) => {
     "Welcome to the *GGRD Community Rewards Bot*\n\n" +
     "This bot helps you complete and verify community tasks so you can join future *GGRD* airdrops and raffles.\n\n" +
     "*How it works (4 simple steps):*\n" +
-    "1. Join the official channel - @GGRDofficial\n" +
-    "2. Join the community chat - @GGRDchat\n" +
+    "1. Join the official channel - " + CHANNEL_ID + "\n" +
+    "2. Join the community chat - " + GROUP_ID + "\n" +
     "3. Click the button below to verify your tasks\n" +
     "4. Send your Solana wallet address for rewards\n\n" +
-    "You can always check your status with /me or /profile.\n\n" +
+    "Use /tasks to see all available rewards.\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
@@ -146,8 +254,8 @@ bot.start(async (ctx) => {
     parse_mode: "Markdown",
     ...Markup.inlineKeyboard([
       [
-        Markup.button.url("Official Channel", "https://t.me/GGRDofficial"),
-        Markup.button.url("Community Chat", "https://t.me/GGRDchat")
+        Markup.button.url("Official Channel", "https://t.me/" + CHANNEL_ID.replace("@", "")),
+        Markup.button.url("Community Chat", "https://t.me/" + GROUP_ID.replace("@", ""))
       ],
       [Markup.button.callback("Verify my tasks", "verify_tasks")]
     ])
@@ -160,13 +268,101 @@ bot.help((ctx) => {
   const msg =
     "This is the official *GGRD Community Rewards Bot*\n\n" +
     "What you can do here:\n" +
-    "- Verify if you joined @GGRDofficial and @GGRDchat\n" +
+    "- Verify if you joined " + CHANNEL_ID + " and " + GROUP_ID + "\n" +
     "- Register your Solana wallet address for GGRD rewards\n" +
-    "- Check your status with /me or /profile\n\n" +
+    "- Check your status with /me or /profile\n" +
+    "- View all tasks with /tasks\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
   ctx.reply(msg, { parse_mode: "Markdown" });
+});
+
+// Command: /tasks - show all tasks and their status
+bot.command(["tasks"], async (ctx) => {
+  const userId = ctx.from.id;
+  console.log(`[TASKS] Command from user ${userId}`);
+  
+  try {
+    const member = await getMember(userId);
+    
+    if (!member) {
+      return ctx.reply(
+        "No data found for your account.\n\n" +
+        "Use /start to register."
+      );
+    }
+    
+    const tasks = member.tasks || {};
+    const task1Complete = member.task1_completed || false;
+    const task2Verified = member.task2_purchase?.verified || false;
+    
+    let message = "Your GGRD Rewards Tasks:\n\n";
+    
+    // TASK 1
+    message += task1Complete ? "[OK] " : "[PENDING] ";
+    message += "Task 1 - Social Media\n";
+    message += (tasks.tg_channel ? "  [OK] " : "  [ ] ") + "Telegram Channel\n";
+    message += (tasks.tg_group ? "  [OK] " : "  [ ] ") + "Telegram Group\n";
+    message += (tasks.twitter_follow ? "  [OK] " : "  [ ] ") + "Twitter/X Follow\n";
+    
+    if (task1Complete) {
+      message += `  Reward: 10 GGRD\n`;
+      message += `  Lottery: Entry ${member.task1_lottery_entry}\n`;
+      message += `  Prize pool: 2,000 GGRD\n`;
+    } else {
+      message += "  Reward: 10 GGRD + lottery (2k pool)\n";
+    }
+    
+    message += "\n";
+    
+    // TASK 2
+    message += task2Verified ? "[OK] " : "[PENDING] ";
+    message += "Task 2 - Purchase Proof\n";
+    message += "  Buy minimum 5 USD worth of GGRD\n";
+    
+    if (member.task2_purchase?.submitted) {
+      message += `  Status: ${task2Verified ? 'Verified' : 'Waiting verification'}\n`;
+      if (task2Verified) {
+        message += `  Reward: 20 GGRD\n`;
+      }
+    } else {
+      message += "  Use /submit_purchase to submit proof\n";
+      message += "  Reward: 20 GGRD\n";
+    }
+    
+    message += "\n";
+    
+    // TASK 3
+    message += "[PENDING] Task 3 - Holder 2500+\n";
+    message += "  Hold 2,500+ GGRD tokens\n";
+    message += "  First 100 holders: 50 GGRD each\n";
+    message += "  All holders: Lottery entry (10k pool)\n";
+    message += "  Status: Waiting for LP launch\n";
+    
+    message += "\n━━━━━━━━━━━━━━━━━━━━━━\n";
+    message += `Total Rewards: ${member.total_rewards || 0} GGRD\n`;
+    
+    const buttons = [];
+    
+    if (!tasks.twitter_follow) {
+      buttons.push([Markup.button.callback("Verify Twitter", "verify_twitter_request")]);
+    }
+    
+    if (!member.task2_purchase?.submitted) {
+      buttons.push([Markup.button.callback("Submit Purchase", "submit_purchase_start")]);
+    }
+    
+    if (buttons.length > 0) {
+      await ctx.reply(message, Markup.inlineKeyboard(buttons));
+    } else {
+      await ctx.reply(message);
+    }
+    
+  } catch (error) {
+    console.error(`[ERROR] Error in tasks command:`, error.message);
+    ctx.reply("Error displaying tasks. Please try again.");
+  }
 });
 
 // Command: /me and /profile - show user status
@@ -178,26 +374,40 @@ bot.command(["me", "profile"], async (ctx) => {
     const member = await getMember(userId);
 
     if (!member) {
-      const count = await membersCollection.countDocuments();
-      console.log(`[NOT FOUND] User ${userId} not found in database (DB has ${count} members)`);
       return ctx.reply(
         "No data found for your account.\n\n" +
-          "Use /start and press the verify button to register."
+        "Use /start and press the verify button to register."
       );
     }
 
-    console.log(`[OK] Found member: ${JSON.stringify(member)}`);
-
     const fullName = ((member.first_name || "") + " " + (member.last_name || "")).trim();
+    const tasks = member.tasks || {};
 
-    const statusMessage =
+    let statusMessage =
       "Your GGRD Community Rewards profile:\n\n" +
       "Telegram ID: " + member.telegram_id + "\n" +
       "Username: " + (member.telegram_username ? "@" + member.telegram_username : "not set") + "\n" +
       "Name: " + (fullName || "not set") + "\n\n" +
-      "Channel member: " + (member.in_channel ? "YES" : "NO") + "\n" +
-      "Group member: " + (member.in_group ? "YES" : "NO") + "\n\n" +
-      "Wallet address: " + (member.wallet_address || "NOT SET");
+      "Channel member: " + (tasks.tg_channel ? "YES" : "NO") + "\n" +
+      "Group member: " + (tasks.tg_group ? "YES" : "NO") + "\n" +
+      "Twitter verified: " + (tasks.twitter_follow ? "YES" : "NO") + "\n\n" +
+      "Wallet address: " + (member.wallet_address || "NOT SET") + "\n\n";
+    
+    statusMessage += "━━━━━━━━━━━━━━━━━━━━━━\n";
+    statusMessage += "REWARDS SUMMARY:\n\n";
+    statusMessage += `Total Earned: ${member.total_rewards || 0} GGRD\n`;
+    
+    if (member.task1_completed) {
+      statusMessage += `Task 1: 10 GGRD (lottery #${member.task1_lottery_entry})\n`;
+    }
+    if (member.task2_purchase?.verified) {
+      statusMessage += `Task 2: 20 GGRD\n`;
+    }
+    if (member.task3_reward > 0) {
+      statusMessage += `Task 3: ${member.task3_reward} GGRD\n`;
+    }
+    
+    statusMessage += "\nUse /tasks to see detailed task status.";
 
     await ctx.reply(statusMessage);
     console.log(`[OK] Profile sent successfully to user ${userId}`);
@@ -207,11 +417,69 @@ bot.command(["me", "profile"], async (ctx) => {
   }
 });
 
+// Admin command: /verify_twitter - manually verify Twitter follow
+bot.command("verify_twitter", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  const args = ctx.message.text.split(" ");
+  if (args.length < 2) {
+    return ctx.reply(
+      "Usage: /verify_twitter <telegram_id>\n\n" +
+      "Example: /verify_twitter 123456789"
+    );
+  }
+  
+  const targetUserId = args[1];
+  const member = await getMember(targetUserId);
+  
+  if (!member) {
+    return ctx.reply(`User ${targetUserId} not found in database.`);
+  }
+  
+  await updateTaskStatus(targetUserId, {
+    "tasks.twitter_follow": true
+  });
+  
+  // Check if Task 1 is now complete
+  const updatedMember = await getMember(targetUserId);
+  const result = await assignTask1Rewards(targetUserId);
+  
+  let responseMsg = `[OK] Twitter verified for user ${targetUserId}\n`;
+  
+  if (result) {
+    responseMsg += `\nTask 1 completed!\n`;
+    responseMsg += `Reward: ${result.reward} GGRD\n`;
+    responseMsg += `Lottery entry: ${result.lotteryEntry}`;
+    
+    // Notify user
+    try {
+      await bot.telegram.sendMessage(
+        targetUserId,
+        "[OK] Your Twitter has been verified!\n\n" +
+        "Task 1 completed!\n" +
+        `Reward: ${result.reward} GGRD\n` +
+        `Lottery entry: ${result.lotteryEntry}\n` +
+        `Prize pool: 2,000 GGRD\n\n` +
+        "Use /tasks to see your status."
+      );
+    } catch (err) {
+      console.log(`[WARN] Could not notify user ${targetUserId}`);
+    }
+  }
+  
+  ctx.reply(responseMsg);
+  console.log(`[ADMIN] Twitter verified for ${targetUserId} by admin ${userId}`);
+});
+
 bot.command("export", async (ctx) => {
   const fromId = String(ctx.from.id);
   console.log(`[EXPORT] Request from user ${fromId}`);
 
-  if (ADMIN_ID && fromId !== ADMIN_ID) {
+  if (!isAdmin(fromId)) {
     console.log(`[DENIED] Unauthorized access attempt by user ${fromId}`);
     return ctx.reply("You are not allowed to use this command.");
   }
@@ -239,6 +507,22 @@ bot.command("export", async (ctx) => {
     console.error(`[ERROR] Failed to export:`, err.message);
     ctx.reply("Failed to export database. Check server logs.");
   }
+});
+
+// Action handler: verify_twitter_request
+bot.action("verify_twitter_request", async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  const msg =
+    "Twitter/X Verification:\n\n" +
+    `1. Follow ${TWITTER_HANDLE} on X/Twitter\n` +
+    "2. Send a screenshot or your Twitter username to this chat\n" +
+    "3. Wait for admin to verify\n\n" +
+    "After verification, you will automatically receive:\n" +
+    "- 10 GGRD reward\n" +
+    "- Entry to 2,000 GGRD lottery";
+  
+  ctx.reply(msg);
 });
 
 // Action handler for button
@@ -270,8 +554,8 @@ bot.action("verify_tasks", async (ctx) => {
       missing.join("\n") +
       "\n\n" +
       "*Please:*\n" +
-      "1. Join the channel: @GGRDofficial\n" +
-      "2. Join the group: @GGRDchat\n" +
+      "1. Join the channel: " + CHANNEL_ID + "\n" +
+      "2. Join the group: " + GROUP_ID + "\n" +
       "3. Click the button again to verify";
 
     return ctx.editMessageText(errorMessage, { parse_mode: "Markdown" });
@@ -281,19 +565,30 @@ bot.action("verify_tasks", async (ctx) => {
     telegram_username: username,
     first_name: firstName,
     last_name: lastName,
-    in_channel: inChannel,
-    in_group: inGroup
+    "tasks.tg_channel": inChannel,
+    "tasks.tg_group": inGroup
   });
 
   const member = await getMember(userId);
 
   if (member && member.wallet_address) {
     console.log(`[OK] User ${userId} already has wallet registered`);
-    const msg =
-      "You're already verified!\n\n" +
-      "Your wallet for GGRD Community Rewards is:\n" +
+    
+    // Check if Task 1 can be completed
+    const result = await assignTask1Rewards(userId);
+    
+    let msg = "You're already verified!\n\n";
+    
+    if (result) {
+      msg += `Task 1 completed!\n`;
+      msg += `Reward: ${result.reward} GGRD\n`;
+      msg += `Lottery entry: ${result.lotteryEntry}\n\n`;
+    }
+    
+    msg += "Your wallet for GGRD Community Rewards is:\n" +
       member.wallet_address +
       "\n\nUse /me or /profile to see your full profile.";
+    
     return ctx.editMessageText(msg);
   }
 
@@ -343,11 +638,21 @@ bot.on("text", async (ctx) => {
   });
 
   waitingForWallet.delete(userId);
+  
+  // Try to complete Task 1
+  const result = await assignTask1Rewards(userId);
 
-  const msg =
-    "All set!\n\n" +
-    "Your wallet has been registered for *GGRD Community Rewards*.\n\n" +
-    "You can check your status anytime with /me or /profile.";
+  let msg = "All set!\n\n" +
+    "Your wallet has been registered for *GGRD Community Rewards*.\n\n";
+  
+  if (result) {
+    msg += `Task 1 completed!\n`;
+    msg += `Reward: ${result.reward} GGRD\n`;
+    msg += `Lottery entry: ${result.lotteryEntry}\n`;
+    msg += `Prize pool: 2,000 GGRD\n\n`;
+  }
+  
+  msg += "You can check your status anytime with /me or /profile.";
 
   ctx.reply(msg, { parse_mode: "Markdown" });
 
@@ -367,6 +672,8 @@ async function startBot() {
     console.log("[OK] GGRD Community Rewards Bot started successfully!");
     console.log(`[INFO] Monitoring channel: ${CHANNEL_ID}`);
     console.log(`[INFO] Monitoring group: ${GROUP_ID}`);
+    console.log(`[INFO] Twitter handle: ${TWITTER_HANDLE}`);
+    console.log(`[INFO] Admin ID: ${ADMIN_ID || 'Not set'}`);
     
     const count = await membersCollection.countDocuments();
     console.log(`[STATS] Current members in database: ${count}`);
