@@ -58,56 +58,86 @@ async function connectToMongoDB() {
 async function upsertMember(telegramId, record) {
   try {
     const id = String(telegramId);
-    const result = await membersCollection.updateOne(
-      { telegram_id: id },
-      { 
-        $set: { 
-          ...record,
-          telegram_id: id,
-          updated_at: new Date()
+    
+    // Check if member exists
+    const existing = await membersCollection.findOne({ telegram_id: id });
+    
+    if (!existing) {
+      // New member - create with full structure
+      const newMember = {
+        telegram_id: id,
+        telegram_username: null,
+        first_name: null,
+        last_name: null,
+        wallet_address: null,
+        tasks: {
+          tg_channel: false,
+          tg_group: false,
+          twitter_follow: false
         },
-        $setOnInsert: {
-          created_at: new Date(),
-          tasks: {
-            tg_channel: false,
-            tg_group: false,
-            twitter_follow: false
-          },
-          task1_completed: false,
-          task1_reward: 0,
-          task1_lottery_entry: null,
-          task2_purchase: {
-            submitted: false,
-            tx_hash: null,
-            amount_usd: 0,
-            verified: false,
-            reward_claimed: false
-          },
-          task2_reward: 0,
-          task3_holder: {
-            balance_ggrd: 0,
-            snapshot_day0: false,
-            snapshot_day7: false,
-            qualified_lottery: false,
-            top100_rank: null
-          },
-          task3_reward: 0,
-          task3_lottery_entry: null,
-          total_rewards: 0,
-          disqualified: false,
-          disqualified_reason: null
-        }
-      },
-      { upsert: true }
-    );
-    
-    if (result.upsertedCount > 0) {
+        task1_completed: false,
+        task1_reward: 0,
+        task1_lottery_entry: null,
+        task2_purchase: {
+          submitted: false,
+          tx_hash: null,
+          amount_usd: 0,
+          verified: false,
+          reward_claimed: false
+        },
+        task2_reward: 0,
+        task3_holder: {
+          balance_ggrd: 0,
+          snapshot_day0: false,
+          snapshot_day7: false,
+          qualified_lottery: false,
+          top100_rank: null
+        },
+        task3_reward: 0,
+        task3_lottery_entry: null,
+        total_rewards: 0,
+        disqualified: false,
+        disqualified_reason: null,
+        created_at: new Date(),
+        updated_at: new Date(),
+        ...record
+      };
+      
+      await membersCollection.insertOne(newMember);
       console.log(`[+] Added new member ${id}`);
-    } else if (result.modifiedCount > 0) {
-      console.log(`[UPDATE] Updated member ${id}`);
+      return { upsertedCount: 1 };
+    } else {
+      // Existing member - update only provided fields
+      const updateDoc = {
+        ...record,
+        updated_at: new Date()
+      };
+      
+      // Migrate old structure to new if needed
+      if (existing.in_channel !== undefined && !existing.tasks) {
+        updateDoc.tasks = {
+          tg_channel: existing.in_channel || false,
+          tg_group: existing.in_group || false,
+          twitter_follow: false
+        };
+        // Remove old fields
+        await membersCollection.updateOne(
+          { telegram_id: id },
+          { $unset: { in_channel: "", in_group: "" } }
+        );
+      }
+      
+      const result = await membersCollection.updateOne(
+        { telegram_id: id },
+        { $set: updateDoc }
+      );
+      
+      if (result.modifiedCount > 0) {
+        console.log(`[UPDATE] Updated member ${id}`);
+      }
+      
+      return result;
     }
-    
-    return result;
   } catch (error) {
     console.error(`[ERROR] Error upserting member ${telegramId}:`, error.message);
     throw error;
@@ -137,14 +167,34 @@ async function getAllMembers() {
 async function updateTaskStatus(telegramId, updates) {
   try {
     const id = String(telegramId);
+    const member = await getMember(id);
+    
+    if (!member) {
+      console.error(`[ERROR] Member ${id} not found for task update`);
+      return;
+    }
+    
+    // Merge updates with existing data
+    const updateDoc = {};
+    
+    for (const [key, value] of Object.entries(updates)) {
+      if (key.includes('.')) {
+        // Handle dot notation (e.g., "tasks.twitter_follow")
+        const [parent, child] = key.split('.');
+        if (!updateDoc[parent]) {
+          updateDoc[parent] = { ...member[parent] };
+        }
+        updateDoc[parent][child] = value;
+      } else {
+        updateDoc[key] = value;
+      }
+    }
+    
+    updateDoc.updated_at = new Date();
+    
     await membersCollection.updateOne(
       { telegram_id: id },
-      { 
-        $set: { 
-          ...updates,
-          updated_at: new Date()
-        }
-      }
+      { $set: updateDoc }
     );
     console.log(`[UPDATE] Task status updated for ${id}`);
   } catch (error) {
@@ -565,8 +615,11 @@ bot.action("verify_tasks", async (ctx) => {
     telegram_username: username,
     first_name: firstName,
     last_name: lastName,
-    "tasks.tg_channel": inChannel,
-    "tasks.tg_group": inGroup
+    tasks: {
+      tg_channel: inChannel,
+      tg_group: inGroup,
+      twitter_follow: false
+    }
   });
 
   const member = await getMember(userId);
