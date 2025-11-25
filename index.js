@@ -136,7 +136,7 @@ bot.start(async (ctx) => {
     "2. Join the community chat - @GGRDchat\n" +
     "3. Click the button below to verify your tasks\n" +
     "4. Send your Solana wallet address for rewards\n\n" +
-    "You can always check your status with /me.\n\n" +
+    "You can always check your status with /me or /profile.\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
@@ -160,7 +160,7 @@ bot.help((ctx) => {
     "What you can do here:\n" +
     "- Verify if you joined @GGRDofficial and @GGRDchat\n" +
     "- Register your Solana wallet address for GGRD rewards\n" +
-    "- Check your status with /me\n\n" +
+    "- Check your status with /me or /profile\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
@@ -218,7 +218,7 @@ bot.action("verify_tasks", async (ctx) => {
       "You're already verified!\n\n" +
       "Your wallet for GGRD Community Rewards is:\n" +
       member.wallet_address +
-      "\n\nUse /me to see your full profile.";
+      "\n\nUse /me or /profile to see your full profile.";
     return ctx.editMessageText(msg);
   }
 
@@ -267,49 +267,49 @@ bot.on("text", async (ctx) => {
   const msg =
     "All set!\n\n" +
     "Your wallet has been registered for *GGRD Community Rewards*.\n\n" +
-    "You can check your status anytime with /me.";
+    "You can check your status anytime with /me or /profile.";
 
   ctx.reply(msg, { parse_mode: "Markdown" });
 
   console.log(`[OK] Wallet registered for user ${userId}: ${text}`);
 });
 
-bot.command("me", async (ctx) => {
+// Command: /me and /profile - show user status
+bot.command(["me", "profile"], async (ctx) => {
   const userId = ctx.from.id;
-  console.log(`[ME] User ${userId} requested profile`);
+  console.log(`[PROFILE] Command from user ${userId}`);
   
-  const member = await getMember(userId);
+  try {
+    const member = await getMember(userId);
 
-  if (!member) {
-    const count = await membersCollection.countDocuments();
-    console.log(`[NOT FOUND] User ${userId} not found in database (DB has ${count} members)`);
-    return ctx.reply(
-      "No data found for your account.\n\n" +
-        "Use /start and press the verify button to register."
-    );
+    if (!member) {
+      const count = await membersCollection.countDocuments();
+      console.log(`[NOT FOUND] User ${userId} not found in database (DB has ${count} members)`);
+      return ctx.reply(
+        "No data found for your account.\n\n" +
+          "Use /start and press the verify button to register."
+      );
+    }
+
+    console.log(`[OK] Found member: ${JSON.stringify(member)}`);
+
+    const fullName = ((member.first_name || "") + " " + (member.last_name || "")).trim();
+
+    const statusMessage =
+      "Your GGRD Community Rewards profile:\n\n" +
+      "Telegram ID: " + member.telegram_id + "\n" +
+      "Username: " + (member.telegram_username ? "@" + member.telegram_username : "not set") + "\n" +
+      "Name: " + (fullName || "not set") + "\n\n" +
+      "Channel member: " + (member.in_channel ? "YES" : "NO") + "\n" +
+      "Group member: " + (member.in_group ? "YES" : "NO") + "\n\n" +
+      "Wallet address: " + (member.wallet_address || "NOT SET");
+
+    await ctx.reply(statusMessage);
+    console.log(`[OK] Profile sent successfully to user ${userId}`);
+  } catch (error) {
+    console.error(`[ERROR] Error in profile command for user ${userId}:`, error.message);
+    ctx.reply("Error displaying profile. Please try /start again.");
   }
-
-  console.log(`[OK] Found member: ${JSON.stringify(member)}`);
-
-  const fullName = ((member.first_name || "") + " " + (member.last_name || "")).trim();
-
-  const statusMessage =
-    "Your GGRD Community Rewards profile:\n\n" +
-    "Telegram ID: " + member.telegram_id + "\n" +
-    "Username: " + (member.telegram_username ? "@" + member.telegram_username : "not set") + "\n" +
-    "Name: " + (fullName || "not set") + "\n\n" +
-    "Channel member: " + (member.in_channel ? "YES" : "NO") + "\n" +
-    "Group member: " + (member.in_group ? "YES" : "NO") + "\n\n" +
-    "Wallet address: " + (member.wallet_address || "NOT SET");
-
-  ctx.reply(statusMessage)
-    .then(() => {
-      console.log(`[OK] Profile sent successfully to user ${userId}`);
-    })
-    .catch((error) => {
-      console.error(`[ERROR] Error sending profile to user ${userId}:`, error.message);
-      ctx.reply("Error displaying profile. Please try /start again.");
-    });
 });
 
 bot.command("export", async (ctx) => {
