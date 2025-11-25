@@ -577,7 +577,7 @@ bot.start(async (ctx) => {
     "/tasks - See all available rewards\n" +
     "/me - Check your status\n" +
     "/top100 - View TOP 100 holders\n" +
-    "/task3_status - Detailed Task 3 status\n" +
+    "/task3\\_status - Detailed Task 3 status\n" +
     "/leaderboard - Holder rankings\n\n" +
     "*Buy GGRD:* Use buttons below to purchase on Jupiter or view on GeckoTerminal.\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
