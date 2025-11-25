@@ -28,6 +28,7 @@ if (!MONGODB_URI) {
 let db;
 let membersCollection;
 let snapshotsCollection;
+let dailySnapshotsCollection;
 
 async function connectToMongoDB() {
   try {
@@ -38,6 +39,7 @@ async function connectToMongoDB() {
     db = client.db("ggrd_bot");
     membersCollection = db.collection("members");
     snapshotsCollection = db.collection("snapshots");
+    dailySnapshotsCollection = db.collection("daily_snapshots");
     
     console.log("[OK] Connected to MongoDB successfully!");
     
@@ -578,6 +580,7 @@ bot.start(async (ctx) => {
     "/me - Check your status\n" +
     "/top100 - View TOP 100 holders\n" +
     "/task3\\_status - Detailed Task 3 status\n" +
+    "/biggest\\_holder - Biggest holder competition\n" +
     "/leaderboard - Holder rankings\n\n" +
     "*Buy GGRD:* Use buttons below to purchase on Jupiter or view on GeckoTerminal.\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
@@ -1386,6 +1389,7 @@ bot.command("stats", async (ctx) => {
     const day7Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day7" });
     const lottery1 = await snapshotsCollection.findOne({ snapshot_type: "lottery_task1" });
     const lottery3 = await snapshotsCollection.findOne({ snapshot_type: "lottery_task3" });
+    const biggestHolderAwarded = await snapshotsCollection.findOne({ snapshot_type: "biggest_holder_award" });
     
     let msg = "📊 GGRD Bot Statistics\n\n";
     
@@ -1436,9 +1440,30 @@ bot.command("stats", async (ctx) => {
       }
     }
     
+    msg += "\n━━━ BIGGEST HOLDER ━━━\n";
+    const dailySnapshots = await dailySnapshotsCollection.countDocuments();
+    msg += `Daily snapshots: ${dailySnapshots}/30\n`;
+    
+    if (dailySnapshots > 0) {
+      const latestSnapshot = await dailySnapshotsCollection.findOne({}, { sort: { day: -1 } });
+      if (latestSnapshot && latestSnapshot.biggest_holder) {
+        msg += `Current leader: ${latestSnapshot.biggest_holder.telegram_id}\n`;
+        msg += `Balance: ${latestSnapshot.biggest_holder.balance} GGRD\n`;
+      }
+    }
+    
+    if (biggestHolderAwarded) {
+      msg += `Award: Executed (${biggestHolderAwarded.winner_telegram_id})\n`;
+    } else if (dailySnapshots >= 30) {
+      msg += "Award: Ready to execute!\n";
+    } else {
+      msg += `Days until award: ${30 - dailySnapshots}\n`;
+    }
+    
     msg += "\n━━━ TOTAL REWARDS ━━━\n";
     const totalRewards = (task1Complete * 10) + (task2Verified * 20) + (top100Count * 50) +
-      (lottery1 ? lottery1.prize_amount : 0) + (lottery3 ? lottery3.prize_amount : 0);
+      (lottery1 ? lottery1.prize_amount : 0) + (lottery3 ? lottery3.prize_amount : 0) +
+      (biggestHolderAwarded ? 20000 : 0);
     msg += `Distributed: ${totalRewards} GGRD\n`;
     
     await ctx.reply(msg);
@@ -1446,6 +1471,292 @@ bot.command("stats", async (ctx) => {
   } catch (error) {
     console.error(`[ERROR] Error displaying stats:`, error.message);
     ctx.reply("Error displaying statistics. Please try again.");
+  }
+});
+
+// Admin command: /daily_snapshot - take daily snapshot for biggest holder tracking
+bot.command("daily_snapshot", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  try {
+    // Check if Day 0 snapshot exists (LP must be launched)
+    const day0Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day0" });
+    if (!day0Snapshot) {
+      return ctx.reply("❌ LP must be launched first! Execute /snapshot_day0");
+    }
+    
+    // Calculate current day number
+    const day0Time = new Date(day0Snapshot.timestamp);
+    const now = new Date();
+    const daysPassed = Math.floor((now - day0Time) / (24 * 60 * 60 * 1000));
+    const currentDay = daysPassed + 1;
+    
+    if (currentDay > 30) {
+      return ctx.reply("❌ 30-day tracking period has ended. Use /award_biggest_holder");
+    }
+    
+    // Check if snapshot already exists for today
+    const existingSnapshot = await dailySnapshotsCollection.findOne({ day: currentDay });
+    if (existingSnapshot) {
+      return ctx.reply(
+        `❌ Daily snapshot already executed for Day ${currentDay}!\n\n` +
+        `Biggest holder: ${existingSnapshot.biggest_holder.telegram_id}\n` +
+        `Balance: ${existingSnapshot.biggest_holder.balance} GGRD`
+      );
+    }
+    
+    await ctx.reply(`🔄 Taking daily snapshot (Day ${currentDay}/30)...\nThis may take a few minutes.`);
+    
+    // Get all holders with ≥2500 GGRD from Day 0
+    const holders = await membersCollection.find({
+      "task3_holder.snapshot_day0": true,
+      disqualified: false
+    }).toArray();
+    
+    let biggestHolder = null;
+    let maxBalance = 0;
+    const holderData = [];
+    
+    for (const holder of holders) {
+      const balance = await getTokenBalance(holder.wallet_address);
+      
+      holderData.push({
+        telegram_id: holder.telegram_id,
+        wallet_address: holder.wallet_address,
+        balance: balance
+      });
+      
+      if (balance > maxBalance) {
+        maxBalance = balance;
+        biggestHolder = {
+          telegram_id: holder.telegram_id,
+          wallet_address: holder.wallet_address,
+          balance: balance
+        };
+      }
+    }
+    
+    // Save daily snapshot
+    await dailySnapshotsCollection.insertOne({
+      day: currentDay,
+      timestamp: new Date(),
+      biggest_holder: biggestHolder,
+      total_holders: holders.length,
+      holders_data: holderData,
+      executed_by: userId
+    });
+    
+    const msg =
+      `✅ Daily Snapshot Complete (Day ${currentDay}/30)\n\n` +
+      `Biggest holder today:\n` +
+      `User: ${biggestHolder.telegram_id}\n` +
+      `Balance: ${biggestHolder.balance.toFixed(0)} GGRD\n\n` +
+      `Total holders tracked: ${holders.length}\n\n` +
+      (currentDay < 30 ? `Next snapshot: Day ${currentDay + 1}` : "30 days complete! Use /award_biggest_holder");
+    
+    await ctx.reply(msg);
+    
+    console.log(`[DAILY_SNAPSHOT] Day ${currentDay}: Biggest holder ${biggestHolder.telegram_id} with ${biggestHolder.balance} GGRD`);
+    
+  } catch (error) {
+    console.error(`[ERROR] Daily snapshot failed:`, error.message);
+    ctx.reply("❌ Error taking daily snapshot. Check server logs.");
+  }
+});
+
+// Command: /biggest_holder - show current biggest holder leader
+bot.command(["biggest_holder", "top_holder"], async (ctx) => {
+  try {
+    const dailySnapshots = await dailySnapshotsCollection.find({}).sort({ day: 1 }).toArray();
+    
+    if (dailySnapshots.length === 0) {
+      return ctx.reply(
+        "📊 Biggest Holder Tracking\n\n" +
+        "No snapshots yet. Waiting for admin to start daily tracking.\n\n" +
+        "Prize: 20,000 GGRD for highest average balance over 30 days!"
+      );
+    }
+    
+    // Calculate average balance for each holder
+    const holderStats = {};
+    
+    for (const snapshot of dailySnapshots) {
+      if (!snapshot.holders_data) continue;
+      
+      for (const holder of snapshot.holders_data) {
+        if (!holderStats[holder.telegram_id]) {
+          holderStats[holder.telegram_id] = {
+            telegram_id: holder.telegram_id,
+            wallet_address: holder.wallet_address,
+            total_balance: 0,
+            days_tracked: 0,
+            daily_balances: []
+          };
+        }
+        
+        holderStats[holder.telegram_id].total_balance += holder.balance;
+        holderStats[holder.telegram_id].days_tracked++;
+        holderStats[holder.telegram_id].daily_balances.push(holder.balance);
+      }
+    }
+    
+    // Calculate averages and sort
+    const rankedHolders = Object.values(holderStats)
+      .map(h => ({
+        ...h,
+        average_balance: h.total_balance / h.days_tracked
+      }))
+      .sort((a, b) => b.average_balance - a.average_balance);
+    
+    const latestSnapshot = dailySnapshots[dailySnapshots.length - 1];
+    const currentLeader = rankedHolders[0];
+    
+    let msg = "📊 Biggest Holder Competition\n\n";
+    msg += `Days tracked: ${dailySnapshots.length}/30\n`;
+    msg += `Prize: 20,000 GGRD\n\n`;
+    
+    msg += "━━━ Current Leader ━━━\n";
+    msg += `User: ${currentLeader.telegram_id}\n`;
+    msg += `Avg balance: ${currentLeader.average_balance.toFixed(0)} GGRD\n`;
+    msg += `Days tracked: ${currentLeader.days_tracked}\n\n`;
+    
+    msg += "━━━ Top 5 Contenders ━━━\n";
+    for (let i = 0; i < Math.min(5, rankedHolders.length); i++) {
+      const h = rankedHolders[i];
+      const wallet = h.wallet_address.substring(0, 4) + "..." + h.wallet_address.substring(h.wallet_address.length - 4);
+      msg += `${i + 1}. ${wallet} - ${h.average_balance.toFixed(0)} GGRD avg\n`;
+    }
+    
+    if (dailySnapshots.length < 30) {
+      msg += `\n⏰ ${30 - dailySnapshots.length} days remaining`;
+    } else {
+      msg += "\n✅ 30 days complete! Winner will be announced soon.";
+    }
+    
+    await ctx.reply(msg);
+    
+  } catch (error) {
+    console.error(`[ERROR] Error displaying biggest holder:`, error.message);
+    ctx.reply("Error displaying biggest holder. Please try again.");
+  }
+});
+
+// Admin command: /award_biggest_holder - award prize after 30 days
+bot.command("award_biggest_holder", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  try {
+    // Check if already awarded
+    const existingAward = await snapshotsCollection.findOne({ snapshot_type: "biggest_holder_award" });
+    if (existingAward) {
+      return ctx.reply(
+        "❌ Biggest holder award already given!\n\n" +
+        `Winner: ${existingAward.winner_telegram_id}\n` +
+        `Average balance: ${existingAward.average_balance.toFixed(0)} GGRD\n` +
+        `Prize: ${existingAward.prize_amount} GGRD`
+      );
+    }
+    
+    // Get all daily snapshots
+    const dailySnapshots = await dailySnapshotsCollection.find({}).sort({ day: 1 }).toArray();
+    
+    if (dailySnapshots.length < 30) {
+      return ctx.reply(
+        `❌ Need 30 daily snapshots to award prize!\n\n` +
+        `Current: ${dailySnapshots.length}/30\n` +
+        `Missing: ${30 - dailySnapshots.length} days`
+      );
+    }
+    
+    // Calculate average balance for each holder over 30 days
+    const holderStats = {};
+    
+    for (const snapshot of dailySnapshots) {
+      if (!snapshot.holders_data) continue;
+      
+      for (const holder of snapshot.holders_data) {
+        if (!holderStats[holder.telegram_id]) {
+          holderStats[holder.telegram_id] = {
+            telegram_id: holder.telegram_id,
+            wallet_address: holder.wallet_address,
+            total_balance: 0,
+            days_tracked: 0
+          };
+        }
+        
+        holderStats[holder.telegram_id].total_balance += holder.balance;
+        holderStats[holder.telegram_id].days_tracked++;
+      }
+    }
+    
+    // Find winner (highest average)
+    let winner = null;
+    let maxAverage = 0;
+    
+    for (const holder of Object.values(holderStats)) {
+      const average = holder.total_balance / holder.days_tracked;
+      if (average > maxAverage) {
+        maxAverage = average;
+        winner = { ...holder, average_balance: average };
+      }
+    }
+    
+    if (!winner) {
+      return ctx.reply("❌ No eligible holders found!");
+    }
+    
+    // Save award record
+    await snapshotsCollection.insertOne({
+      snapshot_type: "biggest_holder_award",
+      timestamp: new Date(),
+      winner_telegram_id: winner.telegram_id,
+      winner_wallet: winner.wallet_address,
+      average_balance: winner.average_balance,
+      days_tracked: winner.days_tracked,
+      prize_amount: 20000,
+      executed_by: userId
+    });
+    
+    // Notify winner
+    try {
+      await bot.telegram.sendMessage(
+        winner.telegram_id,
+        "🎉🎉🎉 BIGGEST HOLDER CHAMPION! 🎉🎉🎉\n\n" +
+        "You held the highest average GGRD balance over 30 days!\n\n" +
+        `Average balance: ${winner.average_balance.toFixed(0)} GGRD\n` +
+        `Prize: 20,000 GGRD\n` +
+        `Wallet: ${winner.wallet_address}\n\n` +
+        "The prize will be sent to your wallet within 24 hours.\n\n" +
+        "Thank you for being a dedicated GGRD holder!"
+      );
+    } catch (err) {
+      console.log(`[WARN] Could not notify winner ${winner.telegram_id}`);
+    }
+    
+    const msg =
+      "🏆 BIGGEST HOLDER AWARD\n\n" +
+      `Winner: ${winner.telegram_id}\n` +
+      `Wallet: ${winner.wallet_address}\n` +
+      `Average balance: ${winner.average_balance.toFixed(0)} GGRD\n` +
+      `Days tracked: ${winner.days_tracked}/30\n` +
+      `Prize: 20,000 GGRD\n\n` +
+      `Executed: ${new Date().toISOString()}`;
+    
+    await ctx.reply(msg);
+    
+    console.log(`[BIGGEST_HOLDER] Winner: ${winner.telegram_id} with avg ${winner.average_balance} GGRD`);
+    
+  } catch (error) {
+    console.error(`[ERROR] Award biggest holder failed:`, error.message);
+    ctx.reply("❌ Error awarding biggest holder. Check server logs.");
   }
 });
 
