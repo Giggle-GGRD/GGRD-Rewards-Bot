@@ -1939,7 +1939,7 @@ bot.command("invite", async (ctx) => {
     msg += `Remaining: ${remaining.toFixed(0)} GGRD\n\n`;
     
     if (remaining > 0) {
-      msg += `*Your link:*\n`${referralLink}`\n\n`;
+      msg += `*Your link:*\n\`${referralLink}\`\n\n`;
       msg += "Use /referrals to see TOP recruiters";
     }
     
@@ -2524,3 +2524,4 @@ process.once("SIGTERM", () => {
 
 // Start the bot
 startBot();
+
