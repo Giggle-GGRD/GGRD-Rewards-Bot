@@ -27,6 +27,7 @@ if (!MONGODB_URI) {
 // === MONGODB CONNECTION ===
 let db;
 let membersCollection;
+let snapshotsCollection;
 
 async function connectToMongoDB() {
   try {
@@ -36,6 +37,7 @@ async function connectToMongoDB() {
     
     db = client.db("ggrd_bot");
     membersCollection = db.collection("members");
+    snapshotsCollection = db.collection("snapshots");
     
     console.log("[OK] Connected to MongoDB successfully!");
     
@@ -50,6 +52,52 @@ async function connectToMongoDB() {
     console.error("[ERROR] Failed to connect to MongoDB:", error.message);
     console.error("[INFO] Check your MONGODB_URI in environment variables.");
     process.exit(1);
+  }
+}
+
+// === CHANTERSPOT API FUNCTIONS ===
+
+async function getTokenBalance(walletAddress, tokenMint) {
+  try {
+    if (!CHANTERSPOT_API_KEY) {
+      console.error("[ERROR] CHANTERSPOT_API_KEY not set");
+      return null;
+    }
+    
+    console.log(`[CHANTERSPOT] Fetching balance for ${walletAddress.substring(0, 8)}...`);
+    
+    const response = await fetch(
+      `https://api.chanterspot.com/v1/wallet/${walletAddress}/tokens`,
+      {
+        headers: {
+          'Authorization': `Bearer ${CHANTERSPOT_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    
+    if (!response.ok) {
+      console.error(`[ERROR] Chanterspot API error: ${response.status}`);
+      return null;
+    }
+    
+    const data = await response.json();
+    
+    // Find GGRD token in the list
+    const ggrdToken = data.tokens?.find(t => t.mint === tokenMint);
+    
+    if (!ggrdToken) {
+      console.log(`[CHANTERSPOT] No GGRD balance found for wallet`);
+      return 0;
+    }
+    
+    const balance = parseFloat(ggrdToken.amount || 0);
+    console.log(`[CHANTERSPOT] Balance: ${balance} GGRD`);
+    
+    return balance;
+  } catch (error) {
+    console.error(`[ERROR] Failed to fetch balance:`, error.message);
+    return null;
   }
 }
 
@@ -294,6 +342,187 @@ async function assignTask2Rewards(telegramId) {
   }
 }
 
+// === TASK 3 FUNCTIONS ===
+
+async function getTokenBalance(walletAddress) {
+  try {
+    if (!CHANTERSPOT_API_KEY) {
+      console.error("[ERROR] CHANTERSPOT_API_KEY not configured");
+      return 0;
+    }
+    
+    const url = `https://mainnet.helius-rpc.com/?api-key=${CHANTERSPOT_API_KEY}`;
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getTokenAccountsByOwner',
+        params: [
+          walletAddress,
+          {
+            mint: GGRD_TOKEN_MINT
+          },
+          {
+            encoding: 'jsonParsed'
+          }
+        ]
+      })
+    });
+    
+    const data = await response.json();
+    
+    if (data.error) {
+      console.error(`[ERROR] RPC error for ${walletAddress}:`, data.error.message);
+      return 0;
+    }
+    
+    if (!data.result || !data.result.value || data.result.value.length === 0) {
+      // No token account found
+      return 0;
+    }
+    
+    const tokenAccount = data.result.value[0];
+    const balance = tokenAccount.account.data.parsed.info.tokenAmount.uiAmount;
+    
+    console.log(`[BALANCE] Wallet ${walletAddress.substring(0, 8)}... has ${balance} GGRD`);
+    
+    return balance || 0;
+  } catch (error) {
+    console.error(`[ERROR] Error fetching token balance for ${walletAddress}:`, error.message);
+    return 0;
+  }
+}
+
+async function getTop100Count() {
+  try {
+    const count = await membersCollection.countDocuments({
+      "task3_holder.top100_rank": { $ne: null }
+    });
+    return count;
+  } catch (error) {
+    console.error("[ERROR] Error getting TOP 100 count:", error.message);
+    return 0;
+  }
+}
+
+async function assignTop100Rank(telegramId) {
+  try {
+    const currentCount = await getTop100Count();
+    
+    if (currentCount >= 100) {
+      console.log(`[LIMIT] TOP 100 is full (${currentCount}/100)`);
+      return null;
+    }
+    
+    const rank = currentCount + 1;
+    
+    await updateTaskStatus(telegramId, {
+      "task3_holder.top100_rank": rank,
+      task3_reward: 50,
+      total_rewards: (await getMember(telegramId)).total_rewards + 50
+    });
+    
+    console.log(`[TOP100] Assigned rank #${rank} to user ${telegramId}`);
+    
+    return rank;
+  } catch (error) {
+    console.error(`[ERROR] Error assigning TOP 100 rank:`, error.message);
+    return null;
+  }
+}
+
+async function assignTask3LotteryEntry(telegramId) {
+  try {
+    const lotteryEntry = await generateLotteryEntry(3);
+    
+    await updateTaskStatus(telegramId, {
+      "task3_holder.qualified_lottery": true,
+      task3_lottery_entry: lotteryEntry
+    });
+    
+    console.log(`[LOTTERY] Task 3 lottery entry ${lotteryEntry} for user ${telegramId}`);
+    
+    return lotteryEntry;
+  } catch (error) {
+    console.error(`[ERROR] Error assigning Task 3 lottery:`, error.message);
+    return null;
+  }
+}
+
+async function getTop100Count() {
+  try {
+    const count = await membersCollection.countDocuments({
+      "task3_holder.top100_rank": { $ne: null }
+    });
+    return count;
+  } catch (error) {
+    console.error("[ERROR] Error getting TOP 100 count:", error.message);
+    return 0;
+  }
+}
+
+async function assignTask3Top100Reward(telegramId, rank) {
+  try {
+    const member = await getMember(telegramId);
+    if (!member) return null;
+    
+    if (member.task3_holder?.top100_rank) {
+      console.log(`[SKIP] Already in TOP 100 at rank ${member.task3_holder.top100_rank}`);
+      return null;
+    }
+    
+    const currentTop100 = await getTop100Count();
+    if (currentTop100 >= 100) {
+      console.log(`[LIMIT] TOP 100 is full (${currentTop100}/100)`);
+      return { error: "top100_full" };
+    }
+    
+    await updateTaskStatus(telegramId, {
+      task3_reward: 50,
+      "task3_holder.top100_rank": rank || (currentTop100 + 1),
+      total_rewards: (member.total_rewards || 0) + 50
+    });
+    
+    console.log(`[REWARD] Task 3 TOP 100 for ${telegramId}: 50 GGRD (rank ${rank || currentTop100 + 1})`);
+    
+    return { reward: 50, rank: rank || (currentTop100 + 1) };
+  } catch (error) {
+    console.error(`[ERROR] Error assigning Task 3 TOP 100 reward:`, error.message);
+    return null;
+  }
+}
+
+async function assignTask3LotteryEntry(telegramId) {
+  try {
+    const member = await getMember(telegramId);
+    if (!member) return null;
+    
+    if (member.task3_lottery_entry) {
+      console.log(`[SKIP] Task 3 lottery entry already assigned: ${member.task3_lottery_entry}`);
+      return null;
+    }
+    
+    const lotteryEntry = await generateLotteryEntry(3);
+    
+    await updateTaskStatus(telegramId, {
+      task3_lottery_entry: lotteryEntry,
+      "task3_holder.qualified_lottery": true
+    });
+    
+    console.log(`[LOTTERY] Task 3 lottery entry for ${telegramId}: ${lotteryEntry}`);
+    
+    return { lotteryEntry };
+  } catch (error) {
+    console.error(`[ERROR] Error assigning Task 3 lottery entry:`, error.message);
+    return null;
+  }
+}
+
 // === HELPERS ===
 
 async function isUserMember(ctx, chatId, userId) {
@@ -439,11 +668,34 @@ bot.command(["tasks"], async (ctx) => {
     message += "\n";
     
     // TASK 3
-    message += "[PENDING] Task 3 - Holder 2500+\n";
-    message += "  Hold 2,500+ GGRD tokens\n";
-    message += "  First 100 holders: 50 GGRD each\n";
-    message += "  All holders: Lottery entry (10k pool)\n";
-    message += "  Status: Waiting for LP launch\n";
+    const task3Top100 = member.task3_holder?.top100_rank || null;
+    const task3Lottery = member.task3_holder?.qualified_lottery || false;
+    const task3Day0 = member.task3_holder?.snapshot_day0 || false;
+    const task3Day7 = member.task3_holder?.snapshot_day7 || false;
+    
+    message += (task3Top100 || task3Lottery) ? "[OK] " : "[PENDING] ";
+    message += "Task 3 - Holder 2500+\n";
+    
+    if (task3Top100) {
+      message += `  TOP 100: Rank #${task3Top100} - 50 GGRD\n`;
+    } else {
+      message += "  First 100 holders: 50 GGRD each\n";
+    }
+    
+    if (task3Day0 && task3Day7 && task3Lottery) {
+      message += `  Lottery: QUALIFIED (Entry ${member.task3_lottery_entry})\n`;
+      message += "  Prize pool: 10,000 GGRD\n";
+    } else if (task3Day0 && !task3Day7) {
+      message += "  Lottery: Waiting for Day 7 snapshot\n";
+      message += "  Prize pool: 10,000 GGRD\n";
+    } else {
+      message += "  All holders ≥2,500: Lottery (10k pool)\n";
+      message += "  Status: Waiting for LP launch\n";
+    }
+    
+    if (task3Top100 || task3Lottery) {
+      message += "\nUse /task3_status for details.\n";
+    }
     
     message += "\n━━━━━━━━━━━━━━━━━━━━━━\n";
     message += `Total Rewards: ${member.total_rewards || 0} GGRD\n`;
@@ -654,6 +906,636 @@ bot.command("verify_purchase", async (ctx) => {
   }
   
   console.log(`[ADMIN] Purchase ${action} for ${targetUserId} by admin ${userId}`);
+});
+
+// Admin command: /snapshot_day0 - execute Day 0 snapshot
+bot.command("snapshot_day0", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  try {
+    // Check if Day 0 snapshot already exists
+    const existingSnapshot = await snapshotsCollection.findOne({ snapshot_type: "day0" });
+    if (existingSnapshot) {
+      return ctx.reply(
+        "❌ Day 0 snapshot already executed!\n\n" +
+        `Timestamp: ${existingSnapshot.timestamp.toISOString()}\n` +
+        `Total qualified: ${existingSnapshot.total_qualified}\n` +
+        `TOP 100 count: ${existingSnapshot.top100_count}`
+      );
+    }
+    
+    await ctx.reply("🔄 Starting Day 0 snapshot...\nThis may take a few minutes.");
+    
+    // Get all members with wallets
+    const members = await membersCollection.find({
+      wallet_address: { $ne: null },
+      disqualified: false
+    }).toArray();
+    
+    console.log(`[SNAPSHOT_DAY0] Processing ${members.length} members`);
+    
+    let qualified = 0;
+    let top100Count = await getTop100Count();
+    const results = [];
+    
+    for (const member of members) {
+      const balance = await getTokenBalance(member.wallet_address);
+      
+      if (balance >= 2500) {
+        qualified++;
+        
+        // Update balance
+        await updateTaskStatus(member.telegram_id, {
+          "task3_holder.balance_ggrd": balance,
+          "task3_holder.snapshot_day0": true
+        });
+        
+        // Assign TOP 100 if slots available
+        if (top100Count < 100 && !member.task3_holder?.top100_rank) {
+          const rank = await assignTop100Rank(member.telegram_id);
+          if (rank) {
+            top100Count++;
+            results.push(`✅ User ${member.telegram_id}: ${balance} GGRD - TOP 100 rank #${rank}`);
+          }
+        } else {
+          results.push(`✅ User ${member.telegram_id}: ${balance} GGRD`);
+        }
+        
+        // Assign lottery entry if not already assigned
+        if (!member.task3_lottery_entry) {
+          await assignTask3LotteryEntry(member.telegram_id);
+        }
+      } else {
+        results.push(`❌ User ${member.telegram_id}: ${balance} GGRD (below 2500)`);
+      }
+    }
+    
+    // Save snapshot record
+    await snapshotsCollection.insertOne({
+      snapshot_type: "day0",
+      timestamp: new Date(),
+      total_members: members.length,
+      total_qualified: qualified,
+      top100_count: top100Count,
+      executed_by: userId
+    });
+    
+    const msg =
+      "✅ Day 0 Snapshot Complete!\n\n" +
+      `Total members checked: ${members.length}\n` +
+      `Qualified (≥2500 GGRD): ${qualified}\n` +
+      `TOP 100 filled: ${top100Count}/100\n\n` +
+      "Day 7 snapshot can be executed in 7 days using /snapshot_day7";
+    
+    await ctx.reply(msg);
+    
+    console.log(`[SNAPSHOT_DAY0] Complete: ${qualified} qualified, TOP 100: ${top100Count}/100`);
+    
+  } catch (error) {
+    console.error(`[ERROR] Snapshot Day 0 failed:`, error.message);
+    ctx.reply("❌ Error executing snapshot. Check server logs.");
+  }
+});
+
+// Admin command: /snapshot_day7 - execute Day 7 snapshot
+bot.command("snapshot_day7", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  try {
+    // Check if Day 0 snapshot exists
+    const day0Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day0" });
+    if (!day0Snapshot) {
+      return ctx.reply("❌ Day 0 snapshot must be executed first!");
+    }
+    
+    // Check if Day 7 snapshot already exists
+    const existingSnapshot = await snapshotsCollection.findOne({ snapshot_type: "day7" });
+    if (existingSnapshot) {
+      return ctx.reply(
+        "❌ Day 7 snapshot already executed!\n\n" +
+        `Timestamp: ${existingSnapshot.timestamp.toISOString()}\n` +
+        `Total qualified for lottery: ${existingSnapshot.lottery_qualified}`
+      );
+    }
+    
+    await ctx.reply("🔄 Starting Day 7 snapshot...\nThis may take a few minutes.");
+    
+    // Get all members who qualified in Day 0
+    const members = await membersCollection.find({
+      "task3_holder.snapshot_day0": true,
+      disqualified: false
+    }).toArray();
+    
+    console.log(`[SNAPSHOT_DAY7] Processing ${members.length} Day 0 qualified members`);
+    
+    let lotteryQualified = 0;
+    const results = [];
+    
+    for (const member of members) {
+      const balance = await getTokenBalance(member.wallet_address);
+      
+      if (balance >= 2500) {
+        // Still qualified - update for lottery
+        lotteryQualified++;
+        
+        await updateTaskStatus(member.telegram_id, {
+          "task3_holder.balance_ggrd": balance,
+          "task3_holder.snapshot_day7": true,
+          "task3_holder.qualified_lottery": true
+        });
+        
+        results.push(`✅ User ${member.telegram_id}: ${balance} GGRD - LOTTERY QUALIFIED`);
+        
+        // Notify user
+        try {
+          await bot.telegram.sendMessage(
+            member.telegram_id,
+            "🎉 Congratulations!\n\n" +
+            "You are qualified for the Task 3 lottery draw!\n\n" +
+            `Your balance: ${balance} GGRD\n` +
+            `Lottery entry: ${member.task3_lottery_entry}\n` +
+            `Prize: 10,000 GGRD\n\n` +
+            "Good luck!"
+          );
+        } catch (err) {
+          console.log(`[WARN] Could not notify user ${member.telegram_id}`);
+        }
+      } else {
+        // Disqualified - sold below 2500
+        await updateTaskStatus(member.telegram_id, {
+          "task3_holder.balance_ggrd": balance,
+          "task3_holder.snapshot_day7": true,
+          "task3_holder.qualified_lottery": false
+        });
+        
+        results.push(`❌ User ${member.telegram_id}: ${balance} GGRD - DISQUALIFIED (sold)`);
+        
+        // Notify user
+        try {
+          await bot.telegram.sendMessage(
+            member.telegram_id,
+            "⚠️ Task 3 Lottery Status\n\n" +
+            "Unfortunately, you are not qualified for the lottery.\n\n" +
+            `Your balance: ${balance} GGRD\n` +
+            "Required: 2,500+ GGRD on both Day 0 and Day 7\n\n" +
+            "You can still participate in other tasks!"
+          );
+        } catch (err) {
+          console.log(`[WARN] Could not notify user ${member.telegram_id}`);
+        }
+      }
+    }
+    
+    // Save snapshot record
+    await snapshotsCollection.insertOne({
+      snapshot_type: "day7",
+      timestamp: new Date(),
+      total_checked: members.length,
+      lottery_qualified: lotteryQualified,
+      disqualified: members.length - lotteryQualified,
+      executed_by: userId
+    });
+    
+    const msg =
+      "✅ Day 7 Snapshot Complete!\n\n" +
+      `Total checked: ${members.length}\n` +
+      `Lottery qualified: ${lotteryQualified}\n` +
+      `Disqualified: ${members.length - lotteryQualified}\n\n` +
+      "Use /lottery 3 to execute the lottery draw.";
+    
+    await ctx.reply(msg);
+    
+    console.log(`[SNAPSHOT_DAY7] Complete: ${lotteryQualified} qualified for lottery`);
+    
+  } catch (error) {
+    console.error(`[ERROR] Snapshot Day 7 failed:`, error.message);
+    ctx.reply("❌ Error executing snapshot. Check server logs.");
+  }
+});
+
+// Command: /top100 - show TOP 100 holders list
+bot.command("top100", async (ctx) => {
+  try {
+    const top100 = await membersCollection.find({
+      "task3_holder.top100_rank": { $ne: null }
+    }).sort({ "task3_holder.top100_rank": 1 }).toArray();
+    
+    if (top100.length === 0) {
+      return ctx.reply(
+        "📊 TOP 100 Holders\n\n" +
+        "No holders yet. Waiting for LP launch and Day 0 snapshot.\n\n" +
+        "First 100 holders with ≥2,500 GGRD receive 50 GGRD each!"
+      );
+    }
+    
+    let msg = "🏆 TOP 100 Early Holders (50 GGRD each)\n\n";
+    msg += `Slots filled: ${top100.length}/100\n`;
+    msg += `Remaining: ${100 - top100.length}\n\n`;
+    
+    // Show first 10, user's rank if in list, and last 5
+    const userId = String(ctx.from.id);
+    const userEntry = top100.find(m => m.telegram_id === userId);
+    
+    msg += "━━━ Top 10 ━━━\n";
+    for (let i = 0; i < Math.min(10, top100.length); i++) {
+      const m = top100[i];
+      const rank = m.task3_holder.top100_rank;
+      const wallet = m.wallet_address.substring(0, 4) + "..." + m.wallet_address.substring(m.wallet_address.length - 4);
+      const balance = m.task3_holder.balance_ggrd || 0;
+      const isYou = m.telegram_id === userId ? " ← YOU" : "";
+      msg += `#${rank}. ${wallet} - ${balance.toFixed(0)} GGRD${isYou}\n`;
+    }
+    
+    // Show user's rank if not in top 10
+    if (userEntry && userEntry.task3_holder.top100_rank > 10) {
+      msg += "\n━━━ Your Rank ━━━\n";
+      const rank = userEntry.task3_holder.top100_rank;
+      const wallet = userEntry.wallet_address.substring(0, 4) + "..." + userEntry.wallet_address.substring(userEntry.wallet_address.length - 4);
+      const balance = userEntry.task3_holder.balance_ggrd || 0;
+      msg += `#${rank}. ${wallet} - ${balance.toFixed(0)} GGRD ← YOU\n`;
+    }
+    
+    // Show last 5
+    if (top100.length > 15) {
+      msg += "\n...\n\n";
+      msg += "━━━ Last 5 ━━━\n";
+      for (let i = Math.max(0, top100.length - 5); i < top100.length; i++) {
+        const m = top100[i];
+        const rank = m.task3_holder.top100_rank;
+        const wallet = m.wallet_address.substring(0, 4) + "..." + m.wallet_address.substring(m.wallet_address.length - 4);
+        const balance = m.task3_holder.balance_ggrd || 0;
+        const isYou = m.telegram_id === userId ? " ← YOU" : "";
+        msg += `#${rank}. ${wallet} - ${balance.toFixed(0)} GGRD${isYou}\n`;
+      }
+    }
+    
+    if (!userEntry) {
+      msg += "\n⚠️ You are not in TOP 100 yet.\n";
+      msg += "Hold ≥2,500 GGRD and wait for admin to run snapshot.";
+    }
+    
+    await ctx.reply(msg);
+    
+  } catch (error) {
+    console.error(`[ERROR] Error displaying TOP 100:`, error.message);
+    ctx.reply("Error displaying TOP 100. Please try again.");
+  }
+});
+
+// Admin command: /lottery - execute lottery draw
+bot.command("lottery", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  const args = ctx.message.text.split(" ");
+  if (args.length < 2) {
+    return ctx.reply(
+      "Usage: /lottery <task_number>\n\n" +
+      "Available lotteries:\n" +
+      "/lottery 1 - Task 1 (2,000 GGRD)\n" +
+      "/lottery 3 - Task 3 (10,000 GGRD)"
+    );
+  }
+  
+  const taskNum = parseInt(args[1]);
+  
+  if (taskNum !== 1 && taskNum !== 3) {
+    return ctx.reply("Invalid task number. Use 1 or 3.");
+  }
+  
+  try {
+    // Check if lottery already executed
+    const existingLottery = await snapshotsCollection.findOne({
+      snapshot_type: `lottery_task${taskNum}`
+    });
+    
+    if (existingLottery) {
+      return ctx.reply(
+        `❌ Task ${taskNum} lottery already executed!\n\n` +
+        `Winner: ${existingLottery.winner_telegram_id}\n` +
+        `Lottery entry: ${existingLottery.winner_entry}\n` +
+        `Prize: ${existingLottery.prize_amount} GGRD\n` +
+        `Executed: ${existingLottery.timestamp.toISOString()}`
+      );
+    }
+    
+    // Get eligible entries
+    let entries;
+    let prizeAmount;
+    
+    if (taskNum === 1) {
+      // Task 1: all with lottery entry
+      entries = await membersCollection.find({
+        task1_lottery_entry: { $ne: null },
+        disqualified: false
+      }).toArray();
+      prizeAmount = 2000;
+    } else {
+      // Task 3: only Day 7 qualified
+      const day7Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day7" });
+      if (!day7Snapshot) {
+        return ctx.reply("❌ Day 7 snapshot must be executed first!");
+      }
+      
+      entries = await membersCollection.find({
+        "task3_holder.qualified_lottery": true,
+        disqualified: false
+      }).toArray();
+      prizeAmount = 10000;
+    }
+    
+    if (entries.length === 0) {
+      return ctx.reply(`❌ No eligible entries for Task ${taskNum} lottery!`);
+    }
+    
+    // Execute lottery
+    const winner = entries[Math.floor(Math.random() * entries.length)];
+    
+    // Save lottery result
+    await snapshotsCollection.insertOne({
+      snapshot_type: `lottery_task${taskNum}`,
+      timestamp: new Date(),
+      winner_telegram_id: winner.telegram_id,
+      winner_entry: taskNum === 1 ? winner.task1_lottery_entry : winner.task3_lottery_entry,
+      winner_wallet: winner.wallet_address,
+      total_entries: entries.length,
+      prize_amount: prizeAmount,
+      executed_by: userId
+    });
+    
+    // Notify winner
+    try {
+      await bot.telegram.sendMessage(
+        winner.telegram_id,
+        `🎉🎉🎉 CONGRATULATIONS! 🎉🎉🎉\n\n` +
+        `You WON the Task ${taskNum} lottery!\n\n` +
+        `Prize: ${prizeAmount} GGRD\n` +
+        `Your wallet: ${winner.wallet_address}\n\n` +
+        `The prize will be sent to your wallet within 24 hours.\n\n` +
+        "Thank you for being part of the GGRD community!"
+      );
+    } catch (err) {
+      console.log(`[WARN] Could not notify winner ${winner.telegram_id}`);
+    }
+    
+    const msg =
+      `🎊 LOTTERY WINNER - TASK ${taskNum}\n\n` +
+      `Winner: ${winner.telegram_id}\n` +
+      `Username: @${winner.telegram_username || 'unknown'}\n` +
+      `Wallet: ${winner.wallet_address}\n` +
+      `Entry: ${taskNum === 1 ? winner.task1_lottery_entry : winner.task3_lottery_entry}\n` +
+      `Prize: ${prizeAmount} GGRD\n\n` +
+      `Total entries: ${entries.length}\n` +
+      `Executed: ${new Date().toISOString()}`;
+    
+    await ctx.reply(msg);
+    
+    console.log(`[LOTTERY] Task ${taskNum} winner: ${winner.telegram_id} (${prizeAmount} GGRD)`);
+    
+  } catch (error) {
+    console.error(`[ERROR] Lottery execution failed:`, error.message);
+    ctx.reply("❌ Error executing lottery. Check server logs.");
+  }
+});
+
+// Command: /leaderboard - public list of qualified holders
+bot.command("leaderboard", async (ctx) => {
+  try {
+    // Get all qualified holders from Day 0 snapshot
+    const qualified = await membersCollection.find({
+      "task3_holder.snapshot_day0": true,
+      disqualified: false
+    }).sort({ "task3_holder.balance_ggrd": -1 }).toArray();
+    
+    if (qualified.length === 0) {
+      return ctx.reply(
+        "📊 GGRD Holder Leaderboard\n\n" +
+        "No qualified holders yet.\n" +
+        "Waiting for LP launch and Day 0 snapshot."
+      );
+    }
+    
+    const day7Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day7" });
+    const lotteryExecuted = await snapshotsCollection.findOne({ snapshot_type: "lottery_task3" });
+    
+    let msg = "📊 GGRD Holder Leaderboard\n\n";
+    msg += `Total qualified: ${qualified.length}\n`;
+    
+    if (day7Snapshot) {
+      const stillQualified = qualified.filter(m => m.task3_holder?.qualified_lottery);
+      msg += `Lottery qualified: ${stillQualified.length}\n`;
+    }
+    
+    if (lotteryExecuted) {
+      msg += `\n🎉 Lottery winner: ${lotteryExecuted.winner_telegram_id}\n`;
+    }
+    
+    msg += "\n━━━ Top 10 Holders ━━━\n";
+    
+    const userId = String(ctx.from.id);
+    
+    for (let i = 0; i < Math.min(10, qualified.length); i++) {
+      const m = qualified[i];
+      const wallet = m.wallet_address.substring(0, 4) + "..." + m.wallet_address.substring(m.wallet_address.length - 4);
+      const balance = m.task3_holder?.balance_ggrd || 0;
+      const isYou = m.telegram_id === userId ? " ← YOU" : "";
+      msg += `${i + 1}. ${wallet} - ${balance.toFixed(0)} GGRD${isYou}\n`;
+    }
+    
+    await ctx.reply(msg);
+    
+  } catch (error) {
+    console.error(`[ERROR] Error displaying leaderboard:`, error.message);
+    ctx.reply("Error displaying leaderboard. Please try again.");
+  }
+});
+
+// Admin command: /stats - comprehensive statistics
+bot.command("stats", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  try {
+    const totalMembers = await membersCollection.countDocuments();
+    const withWallet = await membersCollection.countDocuments({ wallet_address: { $ne: null } });
+    const task1Complete = await membersCollection.countDocuments({ task1_completed: true });
+    const task2Submitted = await membersCollection.countDocuments({ "task2_purchase.submitted": true });
+    const task2Verified = await membersCollection.countDocuments({ "task2_purchase.verified": true });
+    const top100Count = await getTop100Count();
+    
+    const day0Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day0" });
+    const day7Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day7" });
+    const lottery1 = await snapshotsCollection.findOne({ snapshot_type: "lottery_task1" });
+    const lottery3 = await snapshotsCollection.findOne({ snapshot_type: "lottery_task3" });
+    
+    let msg = "📊 GGRD Bot Statistics\n\n";
+    
+    msg += "━━━ MEMBERS ━━━\n";
+    msg += `Total registered: ${totalMembers}\n`;
+    msg += `With wallet: ${withWallet}\n\n`;
+    
+    msg += "━━━ TASK 1 ━━━\n";
+    msg += `Completed: ${task1Complete}\n`;
+    msg += `Rewards paid: ${task1Complete * 10} GGRD\n`;
+    msg += `Lottery: ${lottery1 ? 'Executed' : 'Pending'}\n`;
+    if (lottery1) {
+      msg += `Winner: ${lottery1.winner_telegram_id} (${lottery1.prize_amount} GGRD)\n`;
+    }
+    msg += "\n";
+    
+    msg += "━━━ TASK 2 ━━━\n";
+    msg += `Submitted: ${task2Submitted}\n`;
+    msg += `Verified: ${task2Verified}/${TASK2_MAX_USERS}\n`;
+    msg += `Rewards paid: ${task2Verified * 20} GGRD\n\n`;
+    
+    msg += "━━━ TASK 3 ━━━\n";
+    msg += `TOP 100: ${top100Count}/100\n`;
+    msg += `TOP 100 rewards: ${top100Count * 50} GGRD\n`;
+    
+    if (day0Snapshot) {
+      msg += `Day 0 qualified: ${day0Snapshot.total_qualified}\n`;
+    }
+    
+    if (day7Snapshot) {
+      msg += `Day 7 qualified: ${day7Snapshot.lottery_qualified}\n`;
+      msg += `Lottery: ${lottery3 ? 'Executed' : 'Pending'}\n`;
+      if (lottery3) {
+        msg += `Winner: ${lottery3.winner_telegram_id} (${lottery3.prize_amount} GGRD)\n`;
+      }
+    } else if (day0Snapshot) {
+      const day0Time = new Date(day0Snapshot.timestamp);
+      const day7Time = new Date(day0Time.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const now = new Date();
+      const timeLeft = day7Time - now;
+      
+      if (timeLeft > 0) {
+        const days = Math.floor(timeLeft / (24 * 60 * 60 * 1000));
+        const hours = Math.floor((timeLeft % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+        msg += `Day 7 snapshot in: ${days}d ${hours}h\n`;
+      } else {
+        msg += "Day 7 snapshot: Overdue\n";
+      }
+    }
+    
+    msg += "\n━━━ TOTAL REWARDS ━━━\n";
+    const totalRewards = (task1Complete * 10) + (task2Verified * 20) + (top100Count * 50) +
+      (lottery1 ? lottery1.prize_amount : 0) + (lottery3 ? lottery3.prize_amount : 0);
+    msg += `Distributed: ${totalRewards} GGRD\n`;
+    
+    await ctx.reply(msg);
+    
+  } catch (error) {
+    console.error(`[ERROR] Error displaying stats:`, error.message);
+    ctx.reply("Error displaying statistics. Please try again.");
+  }
+});
+
+// Command: /task3_status - show Task 3 detailed status
+bot.command("task3_status", async (ctx) => {
+  const userId = String(ctx.from.id);
+  
+  try {
+    const member = await getMember(userId);
+    
+    if (!member) {
+      return ctx.reply("Please use /start first to register.");
+    }
+    
+    const day0Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day0" });
+    const day7Snapshot = await snapshotsCollection.findOne({ snapshot_type: "day7" });
+    const top100Count = await getTop100Count();
+    
+    let msg = "📊 TASK 3 - Holder 2500+ Status\n\n";
+    
+    // TOP 100 Section
+    msg += "━━━ TOP 100 REWARD ━━━\n";
+    msg += `Slots filled: ${top100Count}/100\n`;
+    
+    if (member.task3_holder?.top100_rank) {
+      msg += `Your rank: #${member.task3_holder.top100_rank}\n`;
+      msg += `Status: ✅ EARNED 50 GGRD\n`;
+    } else if (top100Count >= 100) {
+      msg += `Your status: ❌ TOP 100 is full\n`;
+    } else {
+      msg += `Your status: ⏳ Waiting for snapshot\n`;
+      msg += `Remaining slots: ${100 - top100Count}\n`;
+    }
+    
+    msg += "\n━━━ LOTTERY 10k GGRD ━━━\n";
+    
+    if (!day0Snapshot) {
+      msg += "Status: ⏳ Waiting for LP launch (Day 0)\n";
+      msg += "\nRequirements:\n";
+      msg += "• Hold ≥2,500 GGRD on Day 0 (LP launch)\n";
+      msg += "• Hold ≥2,500 GGRD on Day 7 (lottery draw)\n";
+    } else {
+      const lotteryQualified = await membersCollection.countDocuments({
+        "task3_holder.qualified_lottery": true
+      });
+      
+      msg += `Total qualified: ${lotteryQualified} holders\n\n`;
+      msg += "Your status:\n";
+      
+      const balance = member.task3_holder?.balance_ggrd || 0;
+      const hasDay0 = member.task3_holder?.snapshot_day0 || false;
+      const hasDay7 = member.task3_holder?.snapshot_day7 || false;
+      const qualified = member.task3_holder?.qualified_lottery || false;
+      
+      if (hasDay0) {
+        msg += `├─ Day 0 (LP launch): ${balance} GGRD ✅\n`;
+      } else {
+        msg += `├─ Day 0 (LP launch): Not qualified ❌\n`;
+      }
+      
+      if (day7Snapshot) {
+        if (hasDay7 && qualified) {
+          msg += `└─ Day 7 (lottery): ${balance} GGRD ✅\n\n`;
+          msg += `🎟️ Lottery Entry: ${member.task3_lottery_entry}\n`;
+          msg += "🎁 Prize: 10,000 GGRD\n";
+          msg += "\n✅ You are qualified for the lottery!";
+        } else {
+          msg += `└─ Day 7 (lottery): ${balance} GGRD ❌\n\n`;
+          msg += "❌ Not qualified (balance below 2,500)";
+        }
+      } else {
+        const day0Time = new Date(day0Snapshot.timestamp);
+        const day7Time = new Date(day0Time.getTime() + 7 * 24 * 60 * 60 * 1000);
+        const now = new Date();
+        const timeLeft = day7Time - now;
+        
+        if (timeLeft > 0) {
+          const days = Math.floor(timeLeft / (24 * 60 * 60 * 1000));
+          const hours = Math.floor((timeLeft % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+          msg += `└─ Day 7 (lottery): Pending\n\n`;
+          msg += `⏰ Next snapshot in: ${days}d ${hours}h\n\n`;
+          msg += "⚠️ Keep ≥2,500 GGRD until Day 7 to stay qualified!";
+        } else {
+          msg += `└─ Day 7 (lottery): Snapshot overdue\n\n`;
+          msg += "⏳ Waiting for admin to execute Day 7 snapshot";
+        }
+      }
+    }
+    
+    await ctx.reply(msg);
+    
+  } catch (error) {
+    console.error(`[ERROR] Error displaying Task 3 status:`, error.message);
+    ctx.reply("Error displaying Task 3 status. Please try again.");
+  }
 });
 
 // Action handler for button
