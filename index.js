@@ -251,6 +251,49 @@ async function assignTask1Rewards(telegramId) {
   }
 }
 
+async function getTask2VerifiedCount() {
+  try {
+    const count = await membersCollection.countDocuments({
+      "task2_purchase.verified": true
+    });
+    return count;
+  } catch (error) {
+    console.error("[ERROR] Error getting Task 2 count:", error.message);
+    return 0;
+  }
+}
+
+async function assignTask2Rewards(telegramId) {
+  try {
+    const member = await getMember(telegramId);
+    if (!member) return null;
+    
+    if (member.task2_reward > 0) {
+      console.log(`[SKIP] Task 2 already rewarded for ${telegramId}`);
+      return null;
+    }
+    
+    const verifiedCount = await getTask2VerifiedCount();
+    if (verifiedCount >= TASK2_MAX_USERS) {
+      console.log(`[LIMIT] Task 2 limit reached (${TASK2_MAX_USERS}/${TASK2_MAX_USERS})`);
+      return { error: "limit_reached" };
+    }
+    
+    await updateTaskStatus(telegramId, {
+      task2_reward: 20,
+      "task2_purchase.reward_claimed": true,
+      total_rewards: (member.total_rewards || 0) + 20
+    });
+    
+    console.log(`[REWARD] Task 2 completed for ${telegramId}: 20 GGRD (${verifiedCount + 1}/${TASK2_MAX_USERS})`);
+    
+    return { reward: 20, count: verifiedCount + 1 };
+  } catch (error) {
+    console.error(`[ERROR] Error assigning Task 2 rewards:`, error.message);
+    return null;
+  }
+}
+
 // === HELPERS ===
 
 async function isUserMember(ctx, chatId, userId) {
@@ -269,12 +312,20 @@ function isValidSolanaAddress(address) {
   return base58Regex.test(address);
 }
 
+function isValidSolanaTxHash(hash) {
+  // Solana transaction hash is base58 encoded, typically 87-88 characters
+  const base58Regex = /^[1-9A-HJ-NP-Za-km-z]{87,88}$/;
+  return base58Regex.test(hash);
+}
+
 function isAdmin(userId) {
   return ADMIN_ID && String(userId) === ADMIN_ID;
 }
 
 // Track users waiting for wallet
 const waitingForWallet = new Set();
+// Track users waiting for TX hash
+const waitingForTxHash = new Set();
 
 // === BOT INIT ===
 const bot = new Telegraf(BOT_TOKEN);
@@ -506,6 +557,105 @@ bot.command("export", async (ctx) => {
   }
 });
 
+// Admin command: /verify_purchase - verify user's purchase
+bot.command("verify_purchase", async (ctx) => {
+  const userId = ctx.from.id;
+  
+  if (!isAdmin(userId)) {
+    return ctx.reply("You are not authorized to use this command.");
+  }
+  
+  const args = ctx.message.text.split(" ");
+  if (args.length < 3) {
+    return ctx.reply(
+      "Usage: /verify_purchase <telegram_id> <approved|rejected>\n\n" +
+      "Example: /verify_purchase 123456789 approved"
+    );
+  }
+  
+  const targetUserId = args[1];
+  const action = args[2].toLowerCase();
+  
+  if (action !== "approved" && action !== "rejected") {
+    return ctx.reply("Action must be 'approved' or 'rejected'");
+  }
+  
+  const member = await getMember(targetUserId);
+  
+  if (!member) {
+    return ctx.reply(`User ${targetUserId} not found in database.`);
+  }
+  
+  if (!member.task2_purchase?.submitted) {
+    return ctx.reply(`User ${targetUserId} has not submitted a purchase proof.`);
+  }
+  
+  if (action === "approved") {
+    // Check limit
+    const verifiedCount = await getTask2VerifiedCount();
+    if (verifiedCount >= TASK2_MAX_USERS) {
+      return ctx.reply(
+        `[LIMIT REACHED] Cannot verify more purchases.\n` +
+        `Current: ${verifiedCount}/${TASK2_MAX_USERS}\n\n` +
+        `User ${targetUserId} will NOT receive rewards.`
+      );
+    }
+    
+    await updateTaskStatus(targetUserId, {
+      "task2_purchase.verified": true
+    });
+    
+    const result = await assignTask2Rewards(targetUserId);
+    
+    let responseMsg = `[OK] Purchase verified for user ${targetUserId}\n`;
+    
+    if (result && !result.error) {
+      responseMsg += `\nTask 2 completed!\n`;
+      responseMsg += `Reward: ${result.reward} GGRD\n`;
+      responseMsg += `Count: ${result.count}/${TASK2_MAX_USERS}`;
+      
+      // Notify user
+      try {
+        await bot.telegram.sendMessage(
+          targetUserId,
+          "[OK] Your purchase has been verified!\n\n" +
+          "Task 2 completed!\n" +
+          `Reward: ${result.reward} GGRD\n\n` +
+          "Use /tasks to see your status."
+        );
+      } catch (err) {
+        console.log(`[WARN] Could not notify user ${targetUserId}`);
+      }
+    } else if (result?.error === "limit_reached") {
+      responseMsg += "\n[WARNING] Limit was reached during processing!";
+    }
+    
+    ctx.reply(responseMsg);
+  } else {
+    // Rejected
+    await updateTaskStatus(targetUserId, {
+      "task2_purchase.verified": false,
+      "task2_purchase.submitted": false,
+      "task2_purchase.tx_hash": null
+    });
+    
+    ctx.reply(`[REJECTED] Purchase rejected for user ${targetUserId}`);
+    
+    // Notify user
+    try {
+      await bot.telegram.sendMessage(
+        targetUserId,
+        "[REJECTED] Your purchase verification was rejected.\n\n" +
+        "Please submit a valid transaction hash using /tasks."
+      );
+    } catch (err) {
+      console.log(`[WARN] Could not notify user ${targetUserId}`);
+    }
+  }
+  
+  console.log(`[ADMIN] Purchase ${action} for ${targetUserId} by admin ${userId}`);
+});
+
 // Action handler for button
 bot.action("verify_tasks", async (ctx) => {
   await ctx.answerCbQuery();
@@ -591,7 +741,53 @@ bot.action("verify_tasks", async (ctx) => {
   ctx.editMessageText(walletRequestMessage, { parse_mode: "Markdown" });
 });
 
-// Text handler for wallet input - MUST be registered AFTER commands
+// Action handler: submit_purchase_start
+bot.action("submit_purchase_start", async (ctx) => {
+  await ctx.answerCbQuery();
+  
+  const userId = ctx.from.id;
+  const member = await getMember(userId);
+  
+  if (!member) {
+    return ctx.reply("Please use /start first to register.");
+  }
+  
+  if (member.task2_purchase?.submitted) {
+    const status = member.task2_purchase.verified ? "verified" : "pending verification";
+    return ctx.reply(
+      `You have already submitted a purchase proof.\n` +
+      `TX Hash: ${member.task2_purchase.tx_hash}\n` +
+      `Status: ${status}\n\n` +
+      `Use /tasks to check your status.`
+    );
+  }
+  
+  const verifiedCount = await getTask2VerifiedCount();
+  if (verifiedCount >= TASK2_MAX_USERS) {
+    return ctx.reply(
+      "Sorry, Task 2 limit has been reached.\n\n" +
+      `Verified purchases: ${verifiedCount}/${TASK2_MAX_USERS}\n\n` +
+      "You can still participate in other tasks!"
+    );
+  }
+  
+  waitingForTxHash.add(userId);
+  
+  const msg =
+    "*Submit Purchase Proof (Task 2)*\n\n" +
+    "Please send your Solana transaction hash from your GGRD purchase.\n\n" +
+    "*Requirements:*\n" +
+    "- Purchase must be minimum 5 USD worth of GGRD\n" +
+    "- Transaction must be from Jupiter, Raydium or other DEX\n" +
+    "- TX hash is 87-88 characters long\n\n" +
+    "*Example TX hash:*\n" +
+    "5a8d9f2b3c4e6h7j8k9m1n2p3q4r5s6t7u8v9w1x2y3z4a5b6c7d8e9f1g2h3j4k5m6n7p8q9r1s2t3u4v5w6x7y8z9";
+  
+  ctx.reply(msg, { parse_mode: "Markdown" });
+  console.log(`[PURCHASE] User ${userId} started submit purchase flow`);
+});
+
+// Text handler for wallet input and TX hash - MUST be registered AFTER commands
 bot.on("text", async (ctx) => {
   const userId = ctx.from.id;
   const text = (ctx.message.text || "").trim();
@@ -602,6 +798,59 @@ bot.on("text", async (ctx) => {
     return;
   }
 
+  // Check if waiting for TX hash (Task 2)
+  if (waitingForTxHash.has(userId)) {
+    console.log(`[TX_HASH] Received potential TX hash from user ${userId}: ${text.substring(0, 15)}...`);
+
+    if (!isValidSolanaTxHash(text)) {
+      console.log(`[INVALID] Invalid TX hash format from user ${userId}`);
+      return ctx.reply(
+        "This does not look like a valid Solana transaction hash.\n\n" +
+          "Please send a correct Solana TX hash (87-88 characters)."
+      );
+    }
+
+    await updateTaskStatus(userId, {
+      "task2_purchase.submitted": true,
+      "task2_purchase.tx_hash": text,
+      "task2_purchase.verified": false
+    });
+
+    waitingForTxHash.delete(userId);
+
+    const msg =
+      "Thank you! Your purchase proof has been submitted.\n\n" +
+      `TX Hash: ${text}\n\n` +
+      "Status: Waiting for admin verification\n\n" +
+      "You will be notified once your purchase is verified.\n" +
+      "Reward: 20 GGRD (upon verification)";
+
+    ctx.reply(msg);
+
+    console.log(`[OK] TX hash submitted for user ${userId}: ${text}`);
+    
+    // Notify admin
+    if (ADMIN_ID) {
+      try {
+        const member = await getMember(userId);
+        await bot.telegram.sendMessage(
+          ADMIN_ID,
+          `[NEW PURCHASE SUBMISSION]\n` +
+          `User ID: ${userId}\n` +
+          `Username: @${member.telegram_username || 'unknown'}\n` +
+          `TX Hash: ${text}\n\n` +
+          `Verify at: https://solscan.io/tx/${text}\n\n` +
+          `To approve: /verify_purchase ${userId} approved\n` +
+          `To reject: /verify_purchase ${userId} rejected`
+        );
+      } catch (err) {
+        console.log(`[WARN] Could not notify admin`);
+      }
+    }
+    return;
+  }
+
+  // Check if waiting for wallet
   if (!waitingForWallet.has(userId)) {
     return;
   }
