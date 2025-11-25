@@ -72,8 +72,7 @@ async function upsertMember(telegramId, record) {
         wallet_address: null,
         tasks: {
           tg_channel: false,
-          tg_group: false,
-          twitter_follow: false
+          tg_group: false
         },
         task1_completed: false,
         task1_reward: 0,
@@ -117,8 +116,7 @@ async function upsertMember(telegramId, record) {
       if (existing.in_channel !== undefined && !existing.tasks) {
         updateDoc.tasks = {
           tg_channel: existing.in_channel || false,
-          tg_group: existing.in_group || false,
-          twitter_follow: false
+          tg_group: existing.in_group || false
         };
         // Remove old fields
         await membersCollection.updateOne(
@@ -216,7 +214,7 @@ async function generateLotteryEntry(taskNumber) {
 
 async function checkTask1Completion(member) {
   const tasks = member.tasks || {};
-  return tasks.tg_channel && tasks.tg_group && tasks.twitter_follow;
+  return tasks.tg_channel && tasks.tg_group;
 }
 
 async function assignTask1Rewards(telegramId) {
@@ -291,12 +289,12 @@ bot.start(async (ctx) => {
   const startMessage =
     "Welcome to the *GGRD Community Rewards Bot*\n\n" +
     "This bot helps you complete and verify community tasks so you can join future *GGRD* airdrops and raffles.\n\n" +
-    "*How it works (4 simple steps):*\n" +
+    "*How it works (3 simple steps):*\n" +
     "1. Join the official channel - " + CHANNEL_ID + "\n" +
     "2. Join the community chat - " + GROUP_ID + "\n" +
-    "3. Click the button below to verify your tasks\n" +
-    "4. Send your Solana wallet address for rewards\n\n" +
+    "3. Click the button below to verify your tasks\n\n" +
     "Use /tasks to see all available rewards.\n\n" +
+    "*Buy GGRD:* Use buttons below to purchase on Jupiter or view on GeckoTerminal.\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
@@ -306,6 +304,10 @@ bot.start(async (ctx) => {
       [
         Markup.button.url("Official Channel", "https://t.me/" + CHANNEL_ID.replace("@", "")),
         Markup.button.url("Community Chat", "https://t.me/" + GROUP_ID.replace("@", ""))
+      ],
+      [
+        Markup.button.url("Buy on Jupiter", "https://jup.ag/tokens/TR97dHmm8nXVndTcxew21138AchNgrk2BhEJGXMybdE"),
+        Markup.button.url("View on GeckoTerminal", "https://www.geckoterminal.com/solana/pools/HWzDBQcPpmGk5J9EXaLQnF4TfndP2pYAzCxBTyfjbnUb")
       ],
       [Markup.button.callback("Verify my tasks", "verify_tasks")]
     ])
@@ -322,6 +324,9 @@ bot.help((ctx) => {
     "- Register your Solana wallet address for GGRD rewards\n" +
     "- Check your status with /me or /profile\n" +
     "- View all tasks with /tasks\n\n" +
+    "*Buy GGRD:*\n" +
+    "- Jupiter: https://jup.ag/tokens/TR97dHmm8nXVndTcxew21138AchNgrk2BhEJGXMybdE\n" +
+    "- GeckoTerminal: https://www.geckoterminal.com/solana/pools/HWzDBQcPpmGk5J9EXaLQnF4TfndP2pYAzCxBTyfjbnUb\n\n" +
     "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
@@ -354,7 +359,6 @@ bot.command(["tasks"], async (ctx) => {
     message += "Task 1 - Social Media\n";
     message += (tasks.tg_channel ? "  [OK] " : "  [ ] ") + "Telegram Channel\n";
     message += (tasks.tg_group ? "  [OK] " : "  [ ] ") + "Telegram Group\n";
-    message += (tasks.twitter_follow ? "  [OK] " : "  [ ] ") + "Twitter/X Follow\n";
     
     if (task1Complete) {
       message += `  Reward: 10 GGRD\n`;
@@ -395,13 +399,15 @@ bot.command(["tasks"], async (ctx) => {
     
     const buttons = [];
     
-    if (!tasks.twitter_follow) {
-      buttons.push([Markup.button.callback("Verify Twitter", "verify_twitter_request")]);
-    }
-    
     if (!member.task2_purchase?.submitted) {
       buttons.push([Markup.button.callback("Submit Purchase", "submit_purchase_start")]);
     }
+    
+    // Add buy buttons
+    buttons.push([
+      Markup.button.url("Buy on Jupiter", "https://jup.ag/tokens/TR97dHmm8nXVndTcxew21138AchNgrk2BhEJGXMybdE"),
+      Markup.button.url("GeckoTerminal", "https://www.geckoterminal.com/solana/pools/HWzDBQcPpmGk5J9EXaLQnF4TfndP2pYAzCxBTyfjbnUb")
+    ]);
     
     if (buttons.length > 0) {
       await ctx.reply(message, Markup.inlineKeyboard(buttons));
@@ -439,8 +445,7 @@ bot.command(["me", "profile"], async (ctx) => {
       "Username: " + (member.telegram_username ? "@" + member.telegram_username : "not set") + "\n" +
       "Name: " + (fullName || "not set") + "\n\n" +
       "Channel member: " + (tasks.tg_channel ? "YES" : "NO") + "\n" +
-      "Group member: " + (tasks.tg_group ? "YES" : "NO") + "\n" +
-      "Twitter verified: " + (tasks.twitter_follow ? "YES" : "NO") + "\n\n" +
+      "Group member: " + (tasks.tg_group ? "YES" : "NO") + "\n\n" +
       "Wallet address: " + (member.wallet_address || "NOT SET") + "\n\n";
     
     statusMessage += "━━━━━━━━━━━━━━━━━━━━━━\n";
@@ -465,64 +470,6 @@ bot.command(["me", "profile"], async (ctx) => {
     console.error(`[ERROR] Error in profile command for user ${userId}:`, error.message);
     ctx.reply("Error displaying profile. Please try /start again.");
   }
-});
-
-// Admin command: /verify_twitter - manually verify Twitter follow
-bot.command("verify_twitter", async (ctx) => {
-  const userId = ctx.from.id;
-  
-  if (!isAdmin(userId)) {
-    return ctx.reply("You are not authorized to use this command.");
-  }
-  
-  const args = ctx.message.text.split(" ");
-  if (args.length < 2) {
-    return ctx.reply(
-      "Usage: /verify_twitter <telegram_id>\n\n" +
-      "Example: /verify_twitter 123456789"
-    );
-  }
-  
-  const targetUserId = args[1];
-  const member = await getMember(targetUserId);
-  
-  if (!member) {
-    return ctx.reply(`User ${targetUserId} not found in database.`);
-  }
-  
-  await updateTaskStatus(targetUserId, {
-    "tasks.twitter_follow": true
-  });
-  
-  // Check if Task 1 is now complete
-  const updatedMember = await getMember(targetUserId);
-  const result = await assignTask1Rewards(targetUserId);
-  
-  let responseMsg = `[OK] Twitter verified for user ${targetUserId}\n`;
-  
-  if (result) {
-    responseMsg += `\nTask 1 completed!\n`;
-    responseMsg += `Reward: ${result.reward} GGRD\n`;
-    responseMsg += `Lottery entry: ${result.lotteryEntry}`;
-    
-    // Notify user
-    try {
-      await bot.telegram.sendMessage(
-        targetUserId,
-        "[OK] Your Twitter has been verified!\n\n" +
-        "Task 1 completed!\n" +
-        `Reward: ${result.reward} GGRD\n` +
-        `Lottery entry: ${result.lotteryEntry}\n` +
-        `Prize pool: 2,000 GGRD\n\n` +
-        "Use /tasks to see your status."
-      );
-    } catch (err) {
-      console.log(`[WARN] Could not notify user ${targetUserId}`);
-    }
-  }
-  
-  ctx.reply(responseMsg);
-  console.log(`[ADMIN] Twitter verified for ${targetUserId} by admin ${userId}`);
 });
 
 bot.command("export", async (ctx) => {
@@ -557,22 +504,6 @@ bot.command("export", async (ctx) => {
     console.error(`[ERROR] Failed to export:`, err.message);
     ctx.reply("Failed to export database. Check server logs.");
   }
-});
-
-// Action handler: verify_twitter_request
-bot.action("verify_twitter_request", async (ctx) => {
-  await ctx.answerCbQuery();
-  
-  const msg =
-    "Twitter/X Verification:\n\n" +
-    `1. Follow ${TWITTER_HANDLE} on X/Twitter\n` +
-    "2. Send a screenshot or your Twitter username to this chat\n" +
-    "3. Wait for admin to verify\n\n" +
-    "After verification, you will automatically receive:\n" +
-    "- 10 GGRD reward\n" +
-    "- Entry to 2,000 GGRD lottery";
-  
-  ctx.reply(msg);
 });
 
 // Action handler for button
@@ -617,8 +548,7 @@ bot.action("verify_tasks", async (ctx) => {
     last_name: lastName,
     tasks: {
       tg_channel: inChannel,
-      tg_group: inGroup,
-      twitter_follow: false
+      tg_group: inGroup
     }
   });
 
@@ -725,8 +655,8 @@ async function startBot() {
     console.log("[OK] GGRD Community Rewards Bot started successfully!");
     console.log(`[INFO] Monitoring channel: ${CHANNEL_ID}`);
     console.log(`[INFO] Monitoring group: ${GROUP_ID}`);
-    console.log(`[INFO] Twitter handle: ${TWITTER_HANDLE}`);
     console.log(`[INFO] Admin ID: ${ADMIN_ID || 'Not set'}`);
+    console.log(`[INFO] Token mint: ${GGRD_TOKEN_MINT}`);
     
     const count = await membersCollection.countDocuments();
     console.log(`[STATS] Current members in database: ${count}`);
