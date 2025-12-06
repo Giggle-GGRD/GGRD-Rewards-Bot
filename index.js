@@ -568,6 +568,26 @@ const waitingForTxHash = new Set();
 // === BOT INIT ===
 const bot = new Telegraf(BOT_TOKEN);
 
+// ========================================
+// GLOBAL MIDDLEWARE: DM-ONLY MODE
+// ========================================
+// Bot responds ONLY in private chats
+// Groups/supergroups are completely ignored
+bot.use(async (ctx, next) => {
+  const chatType = ctx.chat?.type;
+  
+  // Check if message is from a group or supergroup  
+  if (chatType === 'group' || chatType === 'supergroup') {
+    console.log(`[DM-ONLY] Ignoring message from ${chatType} chat (ID: ${ctx.chat.id})`);
+    return; // Completely ignore - no response, no processing
+  }
+  
+  // Private chat - process normally
+  return next();
+});
+
+console.log("[INFO] DM-only mode: Bot will only respond in private chats");
+
 // === COMMANDS & HANDLERS ===
 
 // Commands FIRST - they must be registered before bot.on("text")
