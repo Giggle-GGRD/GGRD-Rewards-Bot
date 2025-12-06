@@ -572,21 +572,41 @@ const bot = new Telegraf(BOT_TOKEN);
 // GLOBAL MIDDLEWARE: DM-ONLY MODE
 // ========================================
 // Bot responds ONLY in private chats
-// Groups/supergroups are completely ignored
+// In groups: shows button to continue in DM
 bot.use(async (ctx, next) => {
   const chatType = ctx.chat?.type;
   
-  // Check if message is from a group or supergroup  
+  // Check if message is from a group or supergroup
   if (chatType === 'group' || chatType === 'supergroup') {
-    console.log(`[DM-ONLY] Ignoring message from ${chatType} chat (ID: ${ctx.chat.id})`);
-    return; // Completely ignore - no response, no processing
+    console.log(`[DM-ONLY] Group message detected - showing DM button`);
+    
+    try {
+      // Get bot username for deep link
+      const botInfo = await ctx.telegram.getMe();
+      const botUsername = botInfo.username;
+      
+      // Create deep link that will auto-start bot in private chat
+      const deepLink = `https://t.me/${botUsername}?start=from_group`;
+      
+      // Send button to continue in private chat
+      await ctx.reply(
+        "👋 Hi! I only work in private chats.",
+        Markup.inlineKeyboard([
+          Markup.button.url("Continue in private chat", deepLink)
+        ])
+      );
+    } catch (error) {
+      console.error(`[ERROR] Failed to send DM button:`, error.message);
+    }
+    
+    return; // Stop processing - don't run any commands in group
   }
   
   // Private chat - process normally
   return next();
 });
 
-console.log("[INFO] DM-only mode: Bot will only respond in private chats");
+console.log("[INFO] DM-only mode: Bot shows redirect button in groups");
 
 // === COMMANDS & HANDLERS ===
 
