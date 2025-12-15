@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-package-lock.json
+# package-lock.json <-- REMOVED - this file should be in repo
 
 # Environment variables
 .env
