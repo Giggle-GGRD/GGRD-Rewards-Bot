@@ -572,31 +572,41 @@ const bot = new Telegraf(BOT_TOKEN);
 // GLOBAL MIDDLEWARE: DM-ONLY MODE
 // ========================================
 // Bot responds ONLY in private chats
-// In groups: shows button to continue in DM
+// In groups: shows button only for commands or mentions
 bot.use(async (ctx, next) => {
   const chatType = ctx.chat?.type;
   
   // Check if message is from a group or supergroup
   if (chatType === 'group' || chatType === 'supergroup') {
-    console.log(`[DM-ONLY] Group message detected - showing DM button`);
+    // Check if it's a command or bot mention
+    const isCommand = ctx.message?.text?.startsWith('/');
+    const isMention = ctx.message?.text?.includes(`@${ctx.botInfo.username}`);
     
-    try {
-      // Get bot username for deep link
-      const botInfo = await ctx.telegram.getMe();
-      const botUsername = botInfo.username;
+    // If it's a command or mention, show DM redirect button
+    if (isCommand || isMention) {
+      console.log(`[DM-ONLY] Command/mention in group - showing DM button`);
       
-      // Create deep link that will auto-start bot in private chat
-      const deepLink = `https://t.me/${botUsername}?start=from_group`;
-      
-      // Send button to continue in private chat
-      await ctx.reply(
-        "👋 Hi! I only work in private chats.",
-        Markup.inlineKeyboard([
-          Markup.button.url("Continue in private chat", deepLink)
-        ])
-      );
-    } catch (error) {
-      console.error(`[ERROR] Failed to send DM button:`, error.message);
+      try {
+        // Get bot username for deep link
+        const botInfo = await ctx.telegram.getMe();
+        const botUsername = botInfo.username;
+        
+        // Create deep link that will auto-start bot in private chat
+        const deepLink = `https://t.me/${botUsername}?start=from_group`;
+        
+        // Send button to continue in private chat
+        await ctx.reply(
+          "👋 Hi! I only work in private chats.",
+          Markup.inlineKeyboard([
+            Markup.button.url("Continue in private chat", deepLink)
+          ])
+        );
+      } catch (error) {
+        console.error(`[ERROR] Failed to send DM button:`, error.message);
+      }
+    } else {
+      // Regular message - silently ignore
+      console.log(`[DM-ONLY] Regular group message - ignoring silently`);
     }
     
     return; // Stop processing - don't run any commands in group
@@ -606,7 +616,7 @@ bot.use(async (ctx, next) => {
   return next();
 });
 
-console.log("[INFO] DM-only mode: Bot shows redirect button in groups");
+console.log("[INFO] DM-only mode: Bot responds only to commands/mentions in groups");
 
 // === COMMANDS & HANDLERS ===
 
