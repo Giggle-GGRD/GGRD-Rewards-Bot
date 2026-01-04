@@ -679,7 +679,7 @@ bot.start(async (ctx) => {
     "/leaderboard - Holder rankings\n" +
     "/invite - Get your referral link\n\n" +
     "*Buy GGRD:* Use buttons below to purchase on Jupiter or view on GeckoTerminal.\n\n" +
-    "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
+    "10% donations to community-voted pediatric oncology organizations.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
   await ctx.reply(startMessage, {
@@ -711,7 +711,7 @@ bot.help((ctx) => {
     "*Buy GGRD:*\n" +
     "- Jupiter: https://jup.ag/tokens/TR97dHmm8nXVndTcxew21138AchNgrk2BhEJGXMybdE\n" +
     "- GeckoTerminal: https://www.geckoterminal.com/solana/pools/HWzDBQcPpmGk5J9EXaLQnF4TfndP2pYAzCxBTyfjbnUb\n\n" +
-    "10% of total GGRD supply is reserved for charity supporting war victims in Ukraine.\n\n" +
+    "10% donations to community-voted pediatric oncology organizations.\n\n" +
     "_High-risk Solana meme experiment. Not financial advice._";
 
   ctx.reply(msg, { parse_mode: "Markdown" });
