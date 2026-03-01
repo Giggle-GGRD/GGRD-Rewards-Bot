@@ -8,16 +8,18 @@ services:
     ports:
       - "127.0.0.1:27017:27017"
     environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER}
+      # Root credentials (password from .env, username hardcoded)
+      MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASS}
-      MONGO_APP_USER: ${MONGODB_USER}
+      # App user (passed to docker/mongo-init.js)
+      MONGO_APP_USER: ggrd_bot_admin
       MONGO_APP_PASS: ${MONGODB_PASS}
-      MONGO_APP_DB: ${MONGODB_DB}
+      MONGO_APP_DB: ggrd_bot
     volumes:
       - mongo_data:/data/db
       - ./docker/mongo-init.js:/docker-entrypoint-initdb.d/01-mongo-init.js:ro
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet \"mongodb://$${MONGO_INITDB_ROOT_USERNAME}:$${MONGO_INITDB_ROOT_PASSWORD}@localhost:27017/admin\" --eval \"db.runCommand({ ping: 1 }).ok\" | grep 1"]
+      test: ["CMD-SHELL", "mongosh --quiet \"mongodb://root:$${MONGO_INITDB_ROOT_PASSWORD}@localhost:27017/admin\" --eval \"db.runCommand({ ping: 1 }).ok\" | grep 1"]
       interval: 10s
       timeout: 5s
       retries: 10

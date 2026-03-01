@@ -3,31 +3,31 @@ const path = require('path');
 const dotenv = require('dotenv');
 const { runFirstRunWizard } = require('./wizard');
 
-const REQUIRED_KEYS = [
+/**
+ * Only truly required env vars — secrets that have NO defaults in config.js.
+ * Public values (BOT_USERNAME, mints, channels, etc.) are hardcoded in config.js.
+ */
+const REQUIRED_SECRETS = [
   'BOT_TOKEN',
-  'BOT_USERNAME',
-  'SOLANA_RPC_URL',
-  'GGRD_TOKEN_MINT',
 ];
 
-function hasDbConfig(env) {
+function hasDbPassword(env) {
+  // Full URI bypasses the need for separate password
   if (env.MONGODB_URI && String(env.MONGODB_URI).trim()) return true;
-  return Boolean(env.MONGODB_USER && env.MONGODB_PASS);
-}
-
-function hasDockerMongoConfig(env) {
-  // Not strictly required if user uses MONGODB_URI, but required for the bundled docker-compose.
-  return Boolean(env.MONGO_ROOT_USER && env.MONGO_ROOT_PASS);
+  // Check all possible password var names
+  return Boolean(
+    env.MONGODB_PASS || env.MONGODB_PASSWORD || env.PASSWORD
+  );
 }
 
 function missingKeys(env) {
   const missing = [];
-  for (const k of REQUIRED_KEYS) {
+  for (const k of REQUIRED_SECRETS) {
     if (!env[k] || !String(env[k]).trim()) missing.push(k);
   }
-  if (!hasDbConfig(env)) missing.push('MONGODB_URI (or MONGODB_USER + MONGODB_PASS)');
-  // Encourage having these when using VPS self-hosted mongo
-  if (!hasDockerMongoConfig(env)) missing.push('MONGO_ROOT_USER + MONGO_ROOT_PASS (for docker-compose mongo)');
+  if (!hasDbPassword(env)) {
+    missing.push('MONGODB_PASS');
+  }
   return missing;
 }
 
@@ -38,12 +38,9 @@ async function ensureEnv({ projectRoot, forceSetup = false }) {
   if (fs.existsSync(envPath)) {
     const raw = fs.readFileSync(envPath, 'utf-8');
     const parsed = dotenv.parse(raw);
-    // do not override existing process.env values
     for (const [k, v] of Object.entries(parsed)) {
       if (process.env[k] === undefined) process.env[k] = v;
     }
-  } else {
-    // Load .env.example (for defaults if needed later)
   }
 
   const missing = missingKeys(process.env);
@@ -54,7 +51,7 @@ async function ensureEnv({ projectRoot, forceSetup = false }) {
 
   if (!process.stdin.isTTY) {
     const msg = [
-      'Missing required configuration and no TTY available for interactive setup.',
+      'Missing required secrets and no TTY available for interactive setup.',
       `Missing: ${missing.join(', ')}`,
       `Create ${envPath} from .env.example or run: node src/index.js --setup`,
     ].join('\n');
@@ -62,10 +59,8 @@ async function ensureEnv({ projectRoot, forceSetup = false }) {
   }
 
   const res = await runFirstRunWizard({ envPath, projectRoot });
-  // Reload env from the newly created file (override process.env)
   dotenv.config({ path: envPath, override: true });
 
-  // Validate again
   const missingAfter = missingKeys(process.env);
   if (missingAfter.length) {
     throw new Error(`Setup incomplete. Missing: ${missingAfter.join(', ')}`);
