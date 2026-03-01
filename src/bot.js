@@ -16,9 +16,17 @@ const {
   resetDailyReferralIfNeeded,
 } = require('./program');
 
-function escapeMd(text) {
+// ──────────────────────────────────────────────
+// FIX: Removed escapeMd (MarkdownV2 escaping).
+// All messages now use parse_mode: 'HTML'.
+// HTML needs only &, <, > escaped in dynamic data.
+// ──────────────────────────────────────────────
+function escapeHtml(text) {
   if (!text) return '';
-  return text.replace(/([_*[]()~`>#+\-=|{}.!])/g, '\\$1');
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function buildMainKeyboard(cfg) {
@@ -58,7 +66,7 @@ async function sendStatus({ cfg, members, connection, ctx }) {
     }
   }
   const msg = await buildStatusMessage(cfg, member, bal);
-  await ctx.reply(msg, { parse_mode: 'Markdown' });
+  await ctx.reply(msg, { parse_mode: 'HTML' });
 }
 
 async function sendInvite({ cfg, members, ctx }) {
@@ -69,16 +77,17 @@ async function sendInvite({ cfg, members, ctx }) {
     last_name: ctx.from.last_name,
   });
 
+  // FIX: URL with underscores is safe in HTML parse_mode — no escaping needed.
   const refLink = `https://t.me/${cfg.BOT_USERNAME}?start=ref_${id}`;
   const shareUrl = buildShareUrl(refLink);
   const msg =
-    `*Your referral link*\n${escapeMd(refLink)}\n\n` +
+    `<b>Your referral link</b>\n<code>${escapeHtml(refLink)}</code>\n\n` +
     `Clicks: ${member.referrals?.clicks || 0}\n` +
     `Verified buyers: ${member.referrals?.verified_total || 0}\n\n` +
-    `_Referrals are credited only after the invited user becomes a verified buyer (holds ≥ ${cfg.MIN_HOLD_GGRD} for ${cfg.HOLD_TIME_1_HOURS}h)._`;
+    `<i>Referrals are credited only after the invited user becomes a verified buyer (holds ≥ ${cfg.MIN_HOLD_GGRD} for ${cfg.HOLD_TIME_1_HOURS}h).</i>`;
 
   await ctx.reply(msg, {
-    parse_mode: 'Markdown',
+    parse_mode: 'HTML',
     ...Markup.inlineKeyboard([
       [Markup.button.url('Share', shareUrl)],
       [Markup.button.callback('📊 Status', 'status')],
@@ -93,25 +102,25 @@ async function buildStatusMessage(cfg, member, ggrdBalance) {
   const points = p.points || {};
 
   const lines = [];
-  lines.push(`*GGRD Rewards Bot — Status*`);
+  lines.push(`<b>GGRD Rewards Bot — Status</b>`);
   lines.push('');
   lines.push(`• Activated: ${p.activated ? '✅' : '❌'}`);
-  lines.push(`• Wallet: ${member.wallet_address ? `✅ ${escapeMd(member.wallet_address)}` : '❌ not linked'}`);
+  lines.push(`• Wallet: ${member.wallet_address ? `✅ <code>${escapeHtml(member.wallet_address)}</code>` : '❌ not linked'}`);
   lines.push(`• Buy verified: ${buy.buy_verified_at ? '✅' : '❌'}`);
   lines.push(`• Hold ≥ ${cfg.MIN_HOLD_GGRD} GGRD: ${ggrdBalance >= cfg.MIN_HOLD_GGRD ? '✅' : '❌'} (${ggrdBalance.toFixed(3)} GGRD)`);
   lines.push(`• Hold 24h: ${p.verified24_at ? '✅' : '❌'}`);
   lines.push(`• Hold 72h: ${p.verified72_at ? '✅' : '❌'}`);
   lines.push('');
-  lines.push(`*Points*`);
+  lines.push(`<b>Points</b>`);
   lines.push(`• Buyer points: ${Math.floor(points.buyer || 0)}`);
   lines.push(`• Referral points: ${Math.floor(points.referral || 0)}`);
   lines.push(`• Total: ${Math.floor(points.total || 0)}`);
   lines.push('');
-  lines.push(`*Referral*`);
+  lines.push(`<b>Referral</b>`);
   lines.push(`• Clicks: ${member.referrals?.clicks || 0}`);
   lines.push(`• Verified buyers: ${member.referrals?.verified_total || 0}`);
   lines.push('');
-  lines.push(`_Note: During DBC phase the bot accrues points. GGRD payouts start after migration._`);
+  lines.push(`<i>Note: During DBC phase the bot accrues points. GGRD payouts start after migration.</i>`);
   return lines.join('\n');
 }
 
@@ -139,8 +148,6 @@ async function runHoldCheckOnce({ cfg, members, events, connection, bot }) {
         mintAddress: cfg.GGRD_MINT,
       });
     } catch {
-      // ignore transient RPC errors
-      // (next cycle will retry)
       continue;
     }
 
@@ -149,7 +156,6 @@ async function runHoldCheckOnce({ cfg, members, events, connection, bot }) {
     const qualifiedAt = p.qualified_at ? new Date(p.qualified_at) : null;
 
     if (bal < cfg.MIN_HOLD_GGRD) {
-      // If not yet verified24, reset qualification timer
       if (!p.verified24_at && qualifiedAt) {
         await members.updateOne(
           { telegram_id: id },
@@ -161,7 +167,6 @@ async function runHoldCheckOnce({ cfg, members, events, connection, bot }) {
       continue;
     }
 
-    // set qualified_at if missing
     let qAt = qualifiedAt;
     if (!qAt) {
       qAt = now;
@@ -190,7 +195,6 @@ async function runHoldCheckOnce({ cfg, members, events, connection, bot }) {
           { $set: { 'program.verified24_at': now, updated_at: new Date() } }
         );
 
-        // Credit referrer (once)
         if (m.referred_by && m.referred_by !== id) {
           await resetDailyReferralIfNeeded(members, m.referred_by);
           const ref = await members.findOne({ telegram_id: String(m.referred_by) });
@@ -198,7 +202,7 @@ async function runHoldCheckOnce({ cfg, members, events, connection, bot }) {
           if (verifiedToday < cfg.MAX_VERIFIED_REFERRALS_PER_DAY) {
             const refEvent = await createEvent(events, {
               event_type: 'referral_verified',
-              telegram_id: id, // dedup by referee
+              telegram_id: id,
             });
             if (refEvent.inserted) {
               const refPoints = Math.min(cfg.REF_POINTS_MAX, Math.floor(0.5 * buyPoints));
@@ -217,7 +221,6 @@ async function runHoldCheckOnce({ cfg, members, events, connection, bot }) {
                 }
               );
 
-              // Best-effort DM notification
               try {
                 await bot.telegram.sendMessage(
                   m.referred_by,
@@ -256,7 +259,7 @@ async function runHoldCheckOnce({ cfg, members, events, connection, bot }) {
 function createBot({ cfg, members, events, connection }) {
   const bot = new Telegraf(cfg.BOT_TOKEN);
 
-  // DM-only mode: ignore non-command group chatter.
+  // DM-only mode
   bot.use(async (ctx, next) => {
     const chatType = ctx.chat?.type;
     if (chatType === 'group' || chatType === 'supergroup') {
@@ -284,7 +287,6 @@ function createBot({ cfg, members, events, connection }) {
     const existing = await members.findOne({ telegram_id: String(ctx.from.id) });
     const isNew = !existing;
 
-    // Create/update member
     const member = await ensureMemberDefaults(members, ctx.from.id, {
       telegram_username: ctx.from.username,
       first_name: ctx.from.first_name,
@@ -292,7 +294,6 @@ function createBot({ cfg, members, events, connection }) {
       referred_by: isNew && referrerId && referrerId !== String(ctx.from.id) ? referrerId : null,
     });
 
-    // Handle referral click counter once on new user
     if (isNew && referrerId && referrerId !== String(ctx.from.id)) {
       const ev = await createEvent(events, { event_type: 'start_ref', telegram_id: ctx.from.id });
       if (ev.inserted) {
@@ -301,9 +302,9 @@ function createBot({ cfg, members, events, connection }) {
     }
 
     const msg =
-      `Welcome to *GGRD Rewards Bot*\n\n` +
-      `Goal: maximize verified buyers & holders during DBC phase.\n` +
-      `• Earn *points* now (no GGRD payouts during DBC).\n` +
+      `Welcome to <b>GGRD Rewards Bot</b>\n\n` +
+      `Goal: maximize verified buyers &amp; holders during DBC phase.\n` +
+      `• Earn <b>points</b> now (no GGRD payouts during DBC).\n` +
       `• GGRD payouts begin after migration.\n\n` +
       `Steps:\n` +
       `1) Activate\n` +
@@ -312,31 +313,31 @@ function createBot({ cfg, members, events, connection }) {
       `4) Hold ≥ ${cfg.MIN_HOLD_GGRD} GGRD for 24h/72h\n\n` +
       `Use /status, /invite, /leaderboard, /rules.`;
 
-    await ctx.reply(msg, { parse_mode: 'Markdown', ...buildMainKeyboard(cfg) });
+    await ctx.reply(msg, { parse_mode: 'HTML', ...buildMainKeyboard(cfg) });
   });
 
   bot.command(['rules'], async (ctx) => {
     const msg =
-      `*Rules (v1)*\n\n` +
+      `<b>Rules (v1)</b>\n\n` +
       `• Points accrue during DBC phase.\n` +
       `• To qualify: verify a buy TX and hold ≥ ${cfg.MIN_HOLD_GGRD} GGRD.\n` +
       `• Verification requires holding for ${cfg.HOLD_TIME_1_HOURS}h (main) and ${cfg.HOLD_TIME_2_HOURS}h (bonus).\n` +
-      `• Referrals pay only for *verified buyers* (after ${cfg.HOLD_TIME_1_HOURS}h hold).\n` +
+      `• Referrals pay only for <b>verified buyers</b> (after ${cfg.HOLD_TIME_1_HOURS}h hold).\n` +
       `• Anti-farm: 1 wallet = 1 account, weekly point caps, daily referral caps.\n\n` +
-      `_GGRD payouts start after migration (marketing pool unlock)._`;
-    await ctx.reply(msg, { parse_mode: 'Markdown' });
+      `<i>GGRD payouts start after migration (marketing pool unlock).</i>`;
+    await ctx.reply(msg, { parse_mode: 'HTML' });
   });
 
   bot.help(async (ctx) => {
     const msg =
-      `*GGRD Rewards Bot*\n\n` +
+      `<b>GGRD Rewards Bot</b>\n\n` +
       `Commands:\n` +
-      `• /status — your status & points\n` +
+      `• /status — your status &amp; points\n` +
       `• /invite — referral link\n` +
       `• /leaderboard — top referrers\n` +
       `• /rules — program rules\n\n` +
       `Use /start to open the main menu.`;
-    await ctx.reply(msg, { parse_mode: 'Markdown' });
+    await ctx.reply(msg, { parse_mode: 'HTML' });
   });
 
   bot.command(['status'], async (ctx) => {
@@ -354,18 +355,18 @@ function createBot({ cfg, members, events, connection }) {
       .limit(10)
       .toArray();
 
-    let msg = '*Leaderboard (verified buyers via referrals)*\n\n';
+    let msg = '<b>Leaderboard (verified buyers via referrals)</b>\n\n';
     if (top.length === 0) {
-      msg += '_No data yet._';
-      await ctx.reply(msg, { parse_mode: 'Markdown' });
+      msg += '<i>No data yet.</i>';
+      await ctx.reply(msg, { parse_mode: 'HTML' });
       return;
     }
 
     top.forEach((u, i) => {
       const name = u.telegram_username ? `@${u.telegram_username}` : `ID:${u.telegram_id}`;
-      msg += `${i + 1}. ${escapeMd(name)} — ${u.referrals?.verified_total || 0} verified, ${Math.floor(u.program?.points?.total || 0)} pts\n`;
+      msg += `${i + 1}. ${escapeHtml(name)} — ${u.referrals?.verified_total || 0} verified, ${Math.floor(u.program?.points?.total || 0)} pts\n`;
     });
-    await ctx.reply(msg, { parse_mode: 'Markdown' });
+    await ctx.reply(msg, { parse_mode: 'HTML' });
   });
 
   // Inline callbacks
@@ -405,7 +406,7 @@ function createBot({ cfg, members, events, connection }) {
       }
     );
     await ctx.answerCbQuery();
-    await ctx.reply('Send your *Solana wallet address* (Base58).', { parse_mode: 'Markdown' });
+    await ctx.reply('Send your <b>Solana wallet address</b> (Base58).', { parse_mode: 'HTML' });
   });
 
   bot.action('submit_txsig', async (ctx) => {
@@ -426,7 +427,7 @@ function createBot({ cfg, members, events, connection }) {
       }
     );
     await ctx.answerCbQuery();
-    await ctx.reply('Paste your *buy transaction signature* (Solana tx).', { parse_mode: 'Markdown' });
+    await ctx.reply('Paste your <b>buy transaction signature</b> (Solana tx).', { parse_mode: 'HTML' });
   });
 
   bot.action('status', async (ctx) => {
@@ -476,7 +477,6 @@ function createBot({ cfg, members, events, connection }) {
             }
           );
         } else {
-          // still clear state
           await members.updateOne(
             { telegram_id: id },
             { $set: { 'program.state.awaiting_wallet': false, updated_at: new Date() } }
@@ -522,7 +522,6 @@ function createBot({ cfg, members, events, connection }) {
         return;
       }
 
-      // Verify TX on-chain
       let result;
       try {
         result = await verifyBuyTx({
@@ -546,7 +545,6 @@ function createBot({ cfg, members, events, connection }) {
         return;
       }
 
-      // Determine net buy in USDC
       let netBuyUsdc = 0;
       if (typeof result.netBuyUsdc === 'number' && result.netBuyUsdc < 0) {
         netBuyUsdc = Math.abs(result.netBuyUsdc);
@@ -560,7 +558,6 @@ function createBot({ cfg, members, events, connection }) {
         return;
       }
 
-      // If USDC not detected (routing), allow via hold threshold later
       if (netBuyUsdc === 0) {
         netBuyUsdc = cfg.MIN_NET_BUY_USDC;
       }
@@ -588,7 +585,6 @@ function createBot({ cfg, members, events, connection }) {
         }
       );
 
-      // Set qualified_at if already holding
       try {
         const bal = await getTokenBalanceByOwner({
           connection,
@@ -615,7 +611,6 @@ function createBot({ cfg, members, events, connection }) {
   });
 
   bot.catch((err) => {
-    // Avoid crashing the process on handler errors
     // eslint-disable-next-line no-console
     console.error('[BOT_ERROR]', err);
   });

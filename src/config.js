@@ -33,6 +33,19 @@ function bool(name, fallback) {
   return ['1', 'true', 'yes', 'y', 'on'].includes(String(raw).toLowerCase());
 }
 
+// ──────────────────────────────────────────────
+// FIX: Helper reads MONGODB_X first, then falls
+//      back to legacy short names (HOST, USER …)
+//      so both old and new .env files work.
+// ──────────────────────────────────────────────
+function env(...names) {
+  for (const n of names) {
+    const v = process.env[n];
+    if (v !== undefined && v !== '') return v;
+  }
+  return undefined;
+}
+
 const config = {
   // Telegram
   BOT_TOKEN: required('BOT_TOKEN'),
@@ -49,22 +62,26 @@ const config = {
     const uri = process.env.MONGODB_URI;
     if (uri && uri.trim()) return uri.trim();
 
-    const host = process.env.MONGODB_HOST || '127.0.0.1';
-    const port = int('MONGODB_PORT', 27017);
-    const dbName = process.env.MONGODB_DB || 'ggrd_bot';
-    const user = process.env.MONGODB_USER;
-    const pass = process.env.MONGODB_PASS;
+    const host = env('MONGODB_HOST', 'HOST') || '127.0.0.1';
+    const port = parseInt(env('MONGODB_PORT', 'PORT') || '27017', 10);
+    const dbName = env('MONGODB_DB', 'DB') || 'ggrd_bot';
+    const user = env('MONGODB_USER', 'USER');
+    const pass = env('MONGODB_PASS', 'MONGODB_PASSWORD', 'PASSWORD');
 
     if (!user || !pass) {
-      throw new Error('Missing required env: MONGODB_URI (or MONGODB_USER + MONGODB_PASS for self-hosted MongoDB)');
+      throw new Error(
+        'Missing required env: MONGODB_URI (or MONGODB_USER + MONGODB_PASS for self-hosted MongoDB).\n' +
+        'Legacy env names USER + PASSWORD are also accepted.\n' +
+        'Run: node src/index.js --setup   to generate a valid .env file.'
+      );
     }
 
     const u = encodeURIComponent(user);
     const p = encodeURIComponent(pass);
-    const authSource = process.env.MONGODB_AUTHSOURCE || 'admin';
+    const authSource = env('MONGODB_AUTHSOURCE', 'AUTHSOURCE') || 'admin';
     return `mongodb://${u}:${p}@${host}:${port}/${dbName}?authSource=${encodeURIComponent(authSource)}`;
   })(),
-  MONGODB_DB: process.env.MONGODB_DB || 'ggrd_bot',
+  MONGODB_DB: env('MONGODB_DB', 'DB') || 'ggrd_bot',
 
   // Solana / program params
   SOLANA_RPC_URL: required('SOLANA_RPC_URL'),
