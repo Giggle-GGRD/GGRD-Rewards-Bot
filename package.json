@@ -1,0 +1,25 @@
+{
+  "name": "ggrd-rewards-bot",
+  "version": "1.1.0",
+  "description": "GGRD Rewards Bot (Pre-Graduation Points + Verified Buyer Referrals)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "setup": "node src/index.js --setup"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "ggrd",
+    "rewards",
+    "solana"
+  ],
+  "author": "EURO-TAX",
+  "license": "ISC",
+  "dependencies": {
+    "@solana/web3.js": "^1.98.0",
+    "dotenv": "^16.6.1",
+    "mongodb": "^6.21.0",
+    "telegraf": "^4.16.3"
+  }
+}
